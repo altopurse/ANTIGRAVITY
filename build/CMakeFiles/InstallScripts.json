@@ -1,0 +1,9 @@
+{
+	"InstallScripts" : 
+	[
+		"C:/Users/joset/OneDrive/Desktop/ANTIGRAVITY/build/cmake_install.cmake",
+		"C:/Users/joset/OneDrive/Desktop/ANTIGRAVITY/build/_deps/glfw-build/cmake_install.cmake",
+		"C:/Users/joset/OneDrive/Desktop/ANTIGRAVITY/build/_deps/glfw-build/src/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

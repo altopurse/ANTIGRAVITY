@@ -1,0 +1,48 @@
+#pragma once
+#include "audio/AudioEngine.h"
+#include "dsp/DSPGraph.h"
+#include "soundboard/Soundboard.h"
+#include <memory>
+#include <string>
+
+class UIController {
+public:
+    UIController(
+        std::shared_ptr<AudioEngine> audioEngine,
+        std::shared_ptr<DSPGraph> dspGraph,
+        std::shared_ptr<Soundboard> soundboard
+    );
+    ~UIController();
+
+    // Renders the entire UI frame
+    void render();
+
+private:
+    std::shared_ptr<AudioEngine> m_audioEngine;
+    std::shared_ptr<DSPGraph> m_dspGraph;
+    std::shared_ptr<Soundboard> m_soundboard;
+
+    // Device selection state index
+    int m_selectedInputIdx = 0;
+    int m_selectedOutputIdx = 0;
+    int m_selectedMonitorIdx = 0;
+
+    // GUI status/alert messages
+    std::string m_statusMessage = "Engine stopped.";
+    bool m_isStatusError = false;
+
+    // Hotkey binding state
+    std::shared_ptr<SoundBoardClip> m_bindingClip = nullptr;
+
+    // Helpers to draw specific sections
+    void drawSettingsPanel();
+    void drawVUMeters();
+    void drawDSPGraphPanel();
+    void drawSoundboardPanel();
+    
+    // Style configuration helper
+    void applyDarkModernTheme();
+
+    // Open file dialog wrapper (Windows native)
+    std::string openFileDialog();
+};

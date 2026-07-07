@@ -1,0 +1,9 @@
+C:/Users/joset/OneDrive/Desktop/ANTIGRAVITY/build/CMakeFiles/voice-changer.dir
+C:/Users/joset/OneDrive/Desktop/ANTIGRAVITY/build/CMakeFiles/edit_cache.dir
+C:/Users/joset/OneDrive/Desktop/ANTIGRAVITY/build/CMakeFiles/rebuild_cache.dir
+C:/Users/joset/OneDrive/Desktop/ANTIGRAVITY/build/_deps/glfw-build/CMakeFiles/edit_cache.dir
+C:/Users/joset/OneDrive/Desktop/ANTIGRAVITY/build/_deps/glfw-build/CMakeFiles/rebuild_cache.dir
+C:/Users/joset/OneDrive/Desktop/ANTIGRAVITY/build/_deps/glfw-build/src/CMakeFiles/glfw.dir
+C:/Users/joset/OneDrive/Desktop/ANTIGRAVITY/build/_deps/glfw-build/src/CMakeFiles/update_mappings.dir
+C:/Users/joset/OneDrive/Desktop/ANTIGRAVITY/build/_deps/glfw-build/src/CMakeFiles/edit_cache.dir
+C:/Users/joset/OneDrive/Desktop/ANTIGRAVITY/build/_deps/glfw-build/src/CMakeFiles/rebuild_cache.dir
