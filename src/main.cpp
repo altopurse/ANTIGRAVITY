@@ -10,6 +10,7 @@
 #include "soundboard/Soundboard.h"
 #include "ui/UIController.h"
 #include "license/LicenseManager.h"
+#include "config/AppConfig.h"
 
 #include <iostream>
 #include <memory>
@@ -77,13 +78,37 @@ int main(int, char**) {
     // Auto-load every sound stored in the app's "sounds" folder
     soundboard->loadSoundsFromAppFolder();
 
+    // Restore persisted settings (%APPDATA%/Antigravity/config.json):
+    // engine options, monitoring, ducking, hotkeys, per-clip state.
+    auto config = std::make_shared<AppConfig>();
+    if (config->load()) {
+        audioEngine->setBufferSizeMs(config->bufferMs);
+        audioEngine->setExclusiveMode(config->exclusiveMode);
+        audioEngine->setMonitorEnabled(config->monitorEnabled);
+        audioEngine->setMonitorVolume(config->monitorVolume);
+        mixer->m_duckingEnabled = config->duckingEnabled;
+        mixer->m_duckingAmount = config->duckingAmount;
+        soundboard->setStopAllHotkey(config->stopAllHotkey);
+        // Re-apply saved hotkey/volume/loop to clips, matched by file path
+        for (auto& clip : soundboard->getClips()) {
+            for (const auto& saved : config->clips) {
+                if (saved.path == clip->path) {
+                    clip->hotkey = saved.hotkey;
+                    clip->volume = saved.volume;
+                    clip->loop = saved.loop;
+                    break;
+                }
+            }
+        }
+    }
+
     // License check (saved key verifies in the background; app stays usable
     // for previously activated users even if the server is unreachable)
     auto licenseManager = std::make_shared<LicenseManager>();
     licenseManager->init();
 
     // Create UI Controller
-    auto uiController = std::make_unique<UIController>(audioEngine, dspGraph, soundboard, licenseManager);
+    auto uiController = std::make_unique<UIController>(audioEngine, dspGraph, soundboard, licenseManager, config);
 
     // Main GUI Loop
     while (!glfwWindowShouldClose(window)) {
@@ -107,6 +132,12 @@ int main(int, char**) {
         
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         glfwSwapBuffers(window);
+    }
+
+    // Persist settings/hotkeys/soundboard state for the next session
+    uiController->captureConfig(*config);
+    if (!config->save()) {
+        std::cerr << "Warning: could not save config to " << AppConfig::configFilePath() << std::endl;
     }
 
     // Cleanup

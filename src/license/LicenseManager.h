@@ -29,6 +29,10 @@ public:
     // Verify a user-entered key in the background; saves it on success.
     void activate(const std::string& key);
 
+    // "Reset License Key": clears the saved key and frees this device's slot
+    // on the server, then locks the app so a key must be entered again.
+    void reset();
+
     // Open the server's purchase page in the default browser.
     void openPurchasePage() const;
 
@@ -53,8 +57,14 @@ private:
 
     // Returns 1 = valid, 0 = invalid, -1 = network/transport error
     static int verifyOnline(const std::string& key);
+    // Frees this device's slot server-side (fire and forget)
+    static void releaseOnline(const std::string& key);
 
     std::atomic<Status> m_status{Status::NoKey};
     std::atomic<bool> m_hadSavedKey{false};
     std::atomic<bool> m_busy{false};
+
+    // Key currently in use (set on successful verify), for reset/release
+    std::mutex m_keyMutex;
+    std::string m_activeKey;
 };

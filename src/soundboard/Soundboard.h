@@ -28,6 +28,14 @@ public:
     void playClip(std::shared_ptr<SoundBoardClip> clip);
     void stopClip(std::shared_ptr<SoundBoardClip> clip);
 
+    // Stop every playing clip (fade-out, click-free)
+    void stopAll();
+
+    // Global "stop all sounds" hotkey (persisted via AppConfig)
+    void setStopAllHotkey(int key);
+    int getStopAllHotkey() const { return m_stopAllHotkey; }
+    void clearStopAllHotkey() { m_stopAllHotkey = -1; }
+
     // Remove a clip from the board. If deleteFile is true, also deletes the
     // underlying file from the app "sounds" folder so it won't reload on
     // the next launch; otherwise it just leaves the board (file stays on disk).
@@ -48,7 +56,9 @@ public:
 
 private:
     std::shared_ptr<Mixer> m_mixer;
-    
+
     // Keep track of keys that were pressed in the previous frame to trigger on rising-edge
     std::vector<bool> m_previousKeyState;
+
+    int m_stopAllHotkey = -1;
 };

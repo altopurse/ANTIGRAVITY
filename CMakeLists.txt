@@ -100,6 +100,9 @@ target_link_libraries(voice-changer PRIVATE
     OpenGL::GL
 )
 
+# App version (sent to the license server for per-key analytics)
+target_compile_definitions(voice-changer PRIVATE APP_VERSION="1.2.0")
+
 # Windows-specific configurations
 if(WIN32)
     # ole32/uuid/winmm: miniaudio; winhttp: license verification;
@@ -112,4 +115,8 @@ if(WIN32)
         shell32
         advapi32
     )
+
+    # Embed the application icon
+    enable_language(RC)
+    target_sources(voice-changer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/installer/app.rc)
 endif()

@@ -1,0 +1,2 @@
+// Embeds the application icon into voice-changer.exe (compiled by windres)
+IDI_ICON1 ICON "app.ico"

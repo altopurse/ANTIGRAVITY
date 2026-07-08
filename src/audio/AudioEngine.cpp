@@ -318,11 +318,14 @@ void AudioEngine::monitorCallback(void* pOutput, ma_uint32 frameCount) {
         m_dbgUnderflows.fetch_add(1, std::memory_order_relaxed);
     }
 
-    // Apply monitoring volume slider
+    // Apply monitoring volume slider, with a hard safety clamp (the slider
+    // goes to 1.5x, which could otherwise push peaks into digital clipping)
     float vol = m_monitorVolume.load(std::memory_order_relaxed);
-    if (vol != 1.0f) {
-        for (size_t i = 0; i < totalSamples; ++i)
-            outBuf[i] *= vol;
+    for (size_t i = 0; i < totalSamples; ++i) {
+        float s = outBuf[i] * vol;
+        if (s > 1.0f) s = 1.0f;
+        else if (s < -1.0f) s = -1.0f;
+        outBuf[i] = s;
     }
 }
 

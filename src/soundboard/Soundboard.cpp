@@ -31,17 +31,39 @@ void Soundboard::updateHotkeys() {
             // GetAsyncKeyState returns MSB as 1 if key is currently down
             bool isDown = (GetAsyncKeyState(key) & 0x8000) != 0;
             bool wasDown = m_previousKeyState[key];
-            
+
             // Rising edge (just pressed)
             if (isDown && !wasDown) {
                 m_mixer->playClip(clip);
                 std::cout << "Soundboard: Hotkey triggered for clip: " << clip->name << std::endl;
             }
-            
+
             m_previousKeyState[key] = isDown;
         }
     }
+
+    // Global stop-all hotkey
+    if (m_stopAllHotkey >= 0 && m_stopAllHotkey < 256) {
+        bool isDown = (GetAsyncKeyState(m_stopAllHotkey) & 0x8000) != 0;
+        bool wasDown = m_previousKeyState[m_stopAllHotkey];
+        if (isDown && !wasDown) {
+            stopAll();
+        }
+        m_previousKeyState[m_stopAllHotkey] = isDown;
+    }
 #endif
+}
+
+void Soundboard::stopAll() {
+    m_mixer->stopAll(/*fade=*/true);
+}
+
+void Soundboard::setStopAllHotkey(int key) {
+    m_stopAllHotkey = key;
+    // Same anti-instant-trigger treatment as clip hotkeys
+    if (key >= 0 && key < static_cast<int>(m_previousKeyState.size())) {
+        m_previousKeyState[key] = true;
+    }
 }
 
 std::shared_ptr<SoundBoardClip> Soundboard::addSound(const std::string& filepath, const std::string& name) {

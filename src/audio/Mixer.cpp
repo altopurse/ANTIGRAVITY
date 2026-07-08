@@ -77,22 +77,36 @@ std::shared_ptr<SoundBoardClip> Mixer::loadClip(const std::string& path, const s
 void Mixer::playClip(std::shared_ptr<SoundBoardClip> clip) {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!clip || !clip->isLoaded) return;
-    
+
     // Seek back to start and play
     ma_decoder_seek_to_pcm_frame(&clip->decoder, 0);
     clip->isPlaying = true;
+    clip->fadingOut = false;
+    clip->fadeGain = 1.0f;
 }
 
-void Mixer::stopClip(std::shared_ptr<SoundBoardClip> clip) {
+void Mixer::stopClip(std::shared_ptr<SoundBoardClip> clip, bool fade) {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!clip) return;
-    clip->isPlaying = false;
+    if (fade && clip->isPlaying) {
+        clip->fadingOut = true; // the audio callback ramps it out
+    } else {
+        clip->isPlaying = false;
+        clip->fadingOut = false;
+        clip->fadeGain = 1.0f;
+    }
 }
 
-void Mixer::stopAll() {
+void Mixer::stopAll(bool fade) {
     std::lock_guard<std::mutex> lock(m_mutex);
     for (auto& clip : m_clips) {
-        clip->isPlaying = false;
+        if (fade && clip->isPlaying) {
+            clip->fadingOut = true;
+        } else {
+            clip->isPlaying = false;
+            clip->fadingOut = false;
+            clip->fadeGain = 1.0f;
+        }
     }
 }
 
@@ -175,10 +189,31 @@ bool Mixer::processAndMix(float* outBuffer, size_t frameCount, int channels, flo
             }
         }
 
-        // Apply volume and mix into m_mixBuffer
+        // Apply volume (and fade-out ramp when stopping) and mix in
         float vol = clip->volume;
-        for (size_t i = 0; i < totalFramesRead * channels; ++i) {
-            m_mixBuffer[i] += m_tempBuffer[i] * vol;
+        if (clip->fadingOut) {
+            // ~30ms linear ramp to zero, per-frame so all channels match
+            float step = 1.0f / static_cast<float>(m_sampleRate * 0.03);
+            for (size_t fr = 0; fr < totalFramesRead; ++fr) {
+                float g = clip->fadeGain * vol;
+                for (int c = 0; c < channels; ++c) {
+                    m_mixBuffer[fr * channels + c] += m_tempBuffer[fr * channels + c] * g;
+                }
+                clip->fadeGain -= step;
+                if (clip->fadeGain <= 0.0f) {
+                    clip->fadeGain = 0.0f;
+                    break;
+                }
+            }
+            if (clip->fadeGain <= 0.0f) {
+                clip->isPlaying = false;
+                clip->fadingOut = false;
+                clip->fadeGain = 1.0f;
+            }
+        } else {
+            for (size_t i = 0; i < totalFramesRead * channels; ++i) {
+                m_mixBuffer[i] += m_tempBuffer[i] * vol;
+            }
         }
     }
 

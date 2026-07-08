@@ -13,12 +13,61 @@ UIController::UIController(
     std::shared_ptr<AudioEngine> audioEngine,
     std::shared_ptr<DSPGraph> dspGraph,
     std::shared_ptr<Soundboard> soundboard,
-    std::shared_ptr<LicenseManager> license
-) : m_audioEngine(audioEngine), m_dspGraph(dspGraph), m_soundboard(soundboard), m_license(license) {
+    std::shared_ptr<LicenseManager> license,
+    std::shared_ptr<AppConfig> config
+) : m_audioEngine(audioEngine), m_dspGraph(dspGraph), m_soundboard(soundboard),
+    m_license(license), m_config(config) {
     applyDarkModernTheme();
+    applyConfigDevices();
 }
 
 UIController::~UIController() {}
+
+void UIController::applyConfigDevices() {
+    if (!m_config) return;
+    const auto& inputs = m_audioEngine->getInputDevices();
+    const auto& outputs = m_audioEngine->getOutputDevices();
+    for (size_t i = 0; i < inputs.size(); ++i) {
+        if (inputs[i].name == m_config->inputDevice) { m_selectedInputIdx = static_cast<int>(i); break; }
+    }
+    for (size_t i = 0; i < outputs.size(); ++i) {
+        if (outputs[i].name == m_config->outputDevice) { m_selectedOutputIdx = static_cast<int>(i); break; }
+    }
+    for (size_t i = 0; i < outputs.size(); ++i) {
+        if (outputs[i].name == m_config->monitorDevice) { m_selectedMonitorIdx = static_cast<int>(i); break; }
+    }
+}
+
+void UIController::captureConfig(AppConfig& cfg) const {
+    const auto& inputs = m_audioEngine->getInputDevices();
+    const auto& outputs = m_audioEngine->getOutputDevices();
+    if (m_selectedInputIdx >= 0 && m_selectedInputIdx < static_cast<int>(inputs.size()))
+        cfg.inputDevice = inputs[m_selectedInputIdx].name;
+    if (m_selectedOutputIdx >= 0 && m_selectedOutputIdx < static_cast<int>(outputs.size()))
+        cfg.outputDevice = outputs[m_selectedOutputIdx].name;
+    if (m_selectedMonitorIdx >= 0 && m_selectedMonitorIdx < static_cast<int>(outputs.size()))
+        cfg.monitorDevice = outputs[m_selectedMonitorIdx].name;
+
+    cfg.bufferMs = m_audioEngine->getBufferSizeMs();
+    cfg.exclusiveMode = m_audioEngine->isExclusiveMode();
+    cfg.monitorEnabled = m_audioEngine->isMonitorEnabled();
+    cfg.monitorVolume = m_audioEngine->getMonitorVolume();
+
+    auto mixer = m_soundboard->getMixer();
+    cfg.duckingEnabled = mixer->m_duckingEnabled;
+    cfg.duckingAmount = mixer->m_duckingAmount;
+    cfg.stopAllHotkey = m_soundboard->getStopAllHotkey();
+
+    cfg.clips.clear();
+    for (const auto& clip : m_soundboard->getClips()) {
+        ClipConfig c;
+        c.path = clip->path;
+        c.hotkey = clip->hotkey;
+        c.volume = clip->volume;
+        c.loop = clip->loop;
+        cfg.clips.push_back(c);
+    }
+}
 
 void UIController::render() {
     // Gate the whole app behind license activation
@@ -30,15 +79,20 @@ void UIController::render() {
     // Poll global soundboard hotkeys in the UI thread
     m_soundboard->updateHotkeys();
 
-    // Check if we are binding a hotkey
-    if (m_bindingClip != nullptr) {
+    // Check if we are binding a hotkey (clip or the global stop-all)
+    if (m_bindingClip != nullptr || m_bindingStopAll) {
 #ifdef _WIN32
         // Scan virtual keys 8..254 (skip mouse buttons VK 1-6 and undefined 7)
         for (int k = 8; k < 255; ++k) {
             if (GetAsyncKeyState(k) & 0x8000) {
-                // setHotkey marks the key as already-down, so no Sleep needed
-                m_soundboard->setHotkey(m_bindingClip, k);
-                m_bindingClip = nullptr;
+                // setters mark the key as already-down, so no Sleep needed
+                if (m_bindingStopAll) {
+                    m_soundboard->setStopAllHotkey(k);
+                    m_bindingStopAll = false;
+                } else {
+                    m_soundboard->setHotkey(m_bindingClip, k);
+                    m_bindingClip = nullptr;
+                }
                 break;
             }
         }
@@ -315,6 +369,23 @@ void UIController::drawSettingsPanel() {
         m_audioEngine->setMonitorVolume(monVol);
     }
 
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // License management
+    ImGui::TextDisabled("License");
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.45f, 0.16f, 0.16f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.65f, 0.20f, 0.20f, 1.0f));
+    if (ImGui::Button("Reset License Key", ImVec2(-1, 0))) {
+        m_audioEngine->stop();
+        m_license->reset();
+    }
+    ImGui::PopStyleColor(2);
+    ImGui::SetItemTooltip("Deactivates this PC and clears the saved key.\n"
+                          "Frees the device slot so the key can be used on another PC.\n"
+                          "You'll need to enter a license key again to use the app.");
+
     ImGui::EndChild();
 }
 
@@ -520,6 +591,34 @@ void UIController::drawSoundboardPanel() {
     ImGui::SetNextItemWidth(140.0f);
     ImGui::SliderFloat("Mic level##duck", &mixer->m_duckingAmount, 0.0f, 1.0f, "%.2f");
     ImGui::SetItemTooltip("Mic volume while sounds play (0 = muted, 1 = unchanged).");
+
+    // Stop-all: button + bindable global hotkey
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.25f, 0.10f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.75f, 0.35f, 0.15f, 1.0f));
+    if (ImGui::Button("STOP ALL SOUNDS", ImVec2(160, 0))) {
+        m_soundboard->stopAll();
+    }
+    ImGui::PopStyleColor(2);
+    ImGui::SetItemTooltip("Fade out and stop every playing clip.");
+
+    ImGui::SameLine();
+    std::string stopAllLabel = "Hotkey: ";
+    if (m_bindingStopAll) {
+        stopAllLabel += "[Press Key]";
+    } else {
+        stopAllLabel += Soundboard::getKeyName(m_soundboard->getStopAllHotkey());
+    }
+    if (ImGui::Button((stopAllLabel + "##stopall").c_str(), ImVec2(-1, 0))) {
+        m_bindingStopAll = true;
+        m_bindingClip = nullptr;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Left-click to bind a global stop-all key.\nRight-click to clear.");
+    }
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+        m_soundboard->clearStopAllHotkey();
+        m_bindingStopAll = false;
+    }
 
     ImGui::Separator();
     ImGui::Spacing();

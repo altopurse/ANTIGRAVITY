@@ -25,6 +25,32 @@ namespace fs = std::filesystem;
 static const wchar_t* kServerHost = L"antigravity-license.onrender.com";
 static const char*    kBuyUrl     = "https://antigravity-license.onrender.com/buy";
 
+#ifndef APP_VERSION
+#define APP_VERSION "1.2.0"
+#endif
+
+// Short OS tag for the per-license usage profile, e.g. "Win11-26200".
+// Only [A-Za-z0-9.-] so it is URL-safe as-is.
+static std::string osTag() {
+#ifdef _WIN32
+    char build[64] = {0};
+    DWORD sz = sizeof(build);
+    if (RegGetValueA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion",
+                     "CurrentBuild", RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY,
+                     nullptr, build, &sz) == ERROR_SUCCESS) {
+        long b = atol(build);
+        std::string tag = (b >= 22000) ? "Win11-" : "Win10-";
+        for (const char* p = build; *p; ++p) {
+            if (isalnum(static_cast<unsigned char>(*p))) tag += *p;
+        }
+        return tag;
+    }
+    return "Windows";
+#else
+    return "other";
+#endif
+}
+
 LicenseManager::LicenseManager() {}
 
 void LicenseManager::init() {
@@ -34,6 +60,10 @@ void LicenseManager::init() {
         return;
     }
     m_hadSavedKey.store(true);
+    {
+        std::lock_guard<std::mutex> lock(m_keyMutex);
+        m_activeKey = saved; // known immediately so reset() works mid-check
+    }
     verifyAsync(saved, /*saveOnSuccess=*/false);
 }
 
@@ -53,6 +83,26 @@ void LicenseManager::openPurchasePage() const {
 #endif
 }
 
+void LicenseManager::reset() {
+    std::string key;
+    {
+        std::lock_guard<std::mutex> lock(m_keyMutex);
+        key = m_activeKey;
+        m_activeKey.clear();
+    }
+    if (key.empty()) key = loadSavedKey();
+
+    deleteSavedKey();
+    m_hadSavedKey.store(false);
+    m_status.store(Status::NoKey);
+
+    // Free this device's slot on the server so the key can be activated on
+    // another PC. Fire-and-forget: local reset must not depend on the network.
+    if (!key.empty()) {
+        std::thread([key]() { releaseOnline(key); }).detach();
+    }
+}
+
 void LicenseManager::verifyAsync(std::string key, bool saveOnSuccess) {
     bool expected = false;
     if (!m_busy.compare_exchange_strong(expected, true)) return; // one check at a time
@@ -63,6 +113,10 @@ void LicenseManager::verifyAsync(std::string key, bool saveOnSuccess) {
         int result = verifyOnline(key);
         if (result == 1) {
             if (saveOnSuccess) saveKey(key);
+            {
+                std::lock_guard<std::mutex> lock(m_keyMutex);
+                m_activeKey = key;
+            }
             m_hadSavedKey.store(true);
             m_status.store(Status::Valid);
         } else if (result == 2) {
@@ -145,22 +199,15 @@ void LicenseManager::deleteSavedKey() {
 // free instance can take ~50s to cold-start before answering.
 // ---------------------------------------------------------------------------
 
-int LicenseManager::verifyOnline(const std::string& key) {
 #ifdef _WIN32
-    // The key alphabet is [A-Za-z0-9_-] and the device id is hex, both safe
-    // to embed in a URL directly.
-    std::string dev = deviceId();
-    std::wstring path = L"/api/verify?key=";
-    path.append(key.begin(), key.end());
-    path += L"&device=";
-    path.append(dev.begin(), dev.end());
+// GET https://<kServerHost><path>, returns response body ("" = transport error).
+static std::string httpGetBody(const std::wstring& path) {
+    std::string body;
 
-    int result = -1;
-
-    HINTERNET hSession = WinHttpOpen(L"AntigravityVoiceEngine/1.1",
+    HINTERNET hSession = WinHttpOpen(L"AntigravityVoiceEngine/" APP_VERSION,
                                      WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                                      WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hSession) return -1;
+    if (!hSession) return body;
     WinHttpSetTimeouts(hSession, 30000, 60000, 30000, 90000);
 
     HINTERNET hConnect = WinHttpConnect(hSession, kServerHost, INTERNET_DEFAULT_HTTPS_PORT, 0);
@@ -176,28 +223,51 @@ int LicenseManager::verifyOnline(const std::string& key) {
                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
         WinHttpReceiveResponse(hRequest, nullptr)) {
 
-        std::string body;
         DWORD available = 0;
         while (WinHttpQueryDataAvailable(hRequest, &available) && available > 0) {
             std::string chunk(available, '\0');
             DWORD read = 0;
             if (!WinHttpReadData(hRequest, chunk.data(), available, &read) || read == 0) break;
             body.append(chunk.data(), read);
-            if (body.size() > 4096) break; // response is tiny; cap defensively
+            if (body.size() > 4096) break; // responses are tiny; cap defensively
         }
-
-        if (body.find("\"valid\":true") != std::string::npos)         result = 1;
-        else if (body.find("device_limit") != std::string::npos)      result = 2;
-        else if (body.find("\"valid\":false") != std::string::npos)   result = 0;
-        // anything else (proxy error page, etc.) stays -1 = network error
     }
 
     if (hRequest) WinHttpCloseHandle(hRequest);
     if (hConnect) WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
-    return result;
+    return body;
+}
+#endif
+
+int LicenseManager::verifyOnline(const std::string& key) {
+#ifdef _WIN32
+    // Key alphabet is [A-Za-z0-9_-], device id is hex, os/version tags are
+    // alphanumeric-dot-dash: all safe to embed in a URL directly.
+    std::string dev = deviceId();
+    std::string os = osTag();
+    std::string q = "/api/verify?key=" + key + "&device=" + dev +
+                    "&os=" + os + "&v=" + APP_VERSION;
+    std::wstring path(q.begin(), q.end());
+
+    std::string body = httpGetBody(path);
+
+    if (body.find("\"valid\":true") != std::string::npos)       return 1;
+    if (body.find("device_limit") != std::string::npos)         return 2;
+    if (body.find("\"valid\":false") != std::string::npos)      return 0;
+    return -1; // empty/garbage (proxy error page, etc.) = network error
 #else
     (void)key;
     return -1;
+#endif
+}
+
+void LicenseManager::releaseOnline(const std::string& key) {
+#ifdef _WIN32
+    std::string q = "/api/release?key=" + key + "&device=" + deviceId();
+    std::wstring path(q.begin(), q.end());
+    httpGetBody(path); // best-effort; response intentionally ignored
+#else
+    (void)key;
 #endif
 }

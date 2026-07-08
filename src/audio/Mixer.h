@@ -14,6 +14,11 @@ struct SoundBoardClip {
     bool isPlaying = false;
     bool loop = false;
     int hotkey = -1; // virtual key code, e.g. VK_F1
+
+    // Click-free stopping: stop requests ramp the gain to zero over ~30ms
+    // inside the audio callback instead of cutting the waveform mid-sample.
+    bool fadingOut = false;
+    float fadeGain = 1.0f;
 };
 
 class Mixer {
@@ -33,8 +38,9 @@ public:
     // Load a clip into the soundboard
     std::shared_ptr<SoundBoardClip> loadClip(const std::string& path, const std::string& name);
     void playClip(std::shared_ptr<SoundBoardClip> clip);
-    void stopClip(std::shared_ptr<SoundBoardClip> clip);
-    void stopAll();
+    // fade=true ramps out over ~30ms (click-free); false cuts immediately
+    void stopClip(std::shared_ptr<SoundBoardClip> clip, bool fade = true);
+    void stopAll(bool fade = true);
 
     // Remove a clip from the board (stops it and releases its decoder)
     void removeClip(std::shared_ptr<SoundBoardClip> clip);

@@ -213,7 +213,31 @@ function signatureValid(key) {
   return expected.length === got.length && crypto.timingSafeEqual(expected, got);
 }
 
-// Called by the desktop app. Query: key (required), device (fingerprint).
+// Per-license usage profile ("user profile" keyed by license, no accounts
+// needed). Fire-and-forget: analytics must never delay or fail a verify.
+function recordProfile(req, key, device) {
+  if (!bindingEnabled) return;
+  const now = new Date().toISOString();
+  const ip = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "")
+    .split(",")[0].trim();
+  const country = String(req.headers["cf-ipcountry"] || req.headers["x-vercel-ip-country"] || "");
+  const fields = [
+    "lastSeen", now,
+    "lastDevice", device || "",
+    "os", String(req.query.os || "").slice(0, 64),
+    "appVersion", String(req.query.v || "").slice(0, 32),
+    "ip", ip.slice(0, 64),
+  ];
+  if (country) fields.push("country", country.slice(0, 8));
+  Promise.all([
+    redis(["HSET", "profile:" + key, ...fields]),
+    redis(["HSETNX", "profile:" + key, "firstSeen", now]),
+    redis(["HINCRBY", "profile:" + key, "checks", 1]),
+  ]).catch((err) => console.error("profile write failed:", err.message));
+}
+
+// Called by the desktop app. Query: key (required), device (fingerprint),
+// os + v (analytics, optional).
 //   { valid: true }                          -> unlock
 //   { valid: false, reason: "invalid" }      -> bad/forged key
 //   { valid: false, reason: "device_limit" } -> real key, too many devices
@@ -234,12 +258,16 @@ app.get("/api/verify", async (req, res) => {
     const setKey = "lic:" + key;
     // Already activated on this device? Always allow.
     if ((await redis(["SISMEMBER", setKey, device])) === 1) {
+      await redis(["SADD", "keys:used", key]);
+      recordProfile(req, key, device);
       return res.json({ valid: true });
     }
     // New device: allow only if under the per-key limit.
     const count = await redis(["SCARD", setKey]);
     if (count < DEVICE_LIMIT) {
       await redis(["SADD", setKey, device]);
+      await redis(["SADD", "keys:used", key]); // permanent used-key registry
+      recordProfile(req, key, device);
       return res.json({ valid: true });
     }
     return res.json({ valid: false, reason: "device_limit" });
@@ -247,6 +275,130 @@ app.get("/api/verify", async (req, res) => {
     // Redis outage: don't punish a paying user whose key is math-valid.
     console.error(err);
     return res.json({ valid: true, degraded: true });
+  }
+});
+
+// Called by the app's "Reset License Key" button: frees this device's slot so
+// the key can be activated on another machine. The key stays in the permanent
+// keys:used registry - releasing never makes a key look unused.
+app.get("/api/release", async (req, res) => {
+  const key = req.query.key;
+  if (!signatureValid(key)) {
+    return res.json({ released: false, reason: "invalid" });
+  }
+  const device = String(req.query.device || "").slice(0, 128);
+  if (!bindingEnabled || !device) {
+    return res.json({ released: true });
+  }
+  try {
+    await redis(["SREM", "lic:" + key, device]);
+    return res.json({ released: true });
+  } catch (err) {
+    console.error(err);
+    return res.json({ released: false, reason: "error" });
+  }
+});
+
+// ---------- owner-only admin (set ADMIN_SECRET in Render to enable) ----------
+
+const ADMIN_SECRET = process.env.ADMIN_SECRET || "";
+
+function adminAuthorized(req) {
+  const given = String(req.query.secret || "");
+  return (
+    ADMIN_SECRET.length > 0 &&
+    given.length === ADMIN_SECRET.length &&
+    crypto.timingSafeEqual(Buffer.from(given), Buffer.from(ADMIN_SECRET))
+  );
+}
+
+async function collectKeyData() {
+  const keys = (await redis(["SMEMBERS", "keys:used"])) || [];
+  const out = [];
+  for (const k of keys.slice(0, 500)) {
+    const profile = (await redis(["HGETALL", "profile:" + k])) || [];
+    // Upstash returns HGETALL as a flat [field, value, ...] array
+    const p = {};
+    for (let i = 0; i + 1 < profile.length; i += 2) p[profile[i]] = profile[i + 1];
+    out.push({
+      key: k,
+      activeDevices: await redis(["SCARD", "lic:" + k]),
+      ...p,
+    });
+  }
+  return { count: keys.length, keys: out };
+}
+
+// JSON view of every key ever activated + its usage profile.
+app.get("/api/admin/keys", async (req, res) => {
+  if (!adminAuthorized(req)) return res.status(403).json({ error: "forbidden" });
+  if (!bindingEnabled) {
+    return res.json({ count: 0, keys: [], note: "device binding disabled - nothing tracked" });
+  }
+  try {
+    res.json(await collectKeyData());
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "redis error" });
+  }
+});
+
+// Device manager: wipe all device slots for a key (e.g. customer got a new PC
+// and lost access to the old ones). The key stays in the used registry.
+app.get("/api/admin/clear", async (req, res) => {
+  if (!adminAuthorized(req)) return res.status(403).json({ error: "forbidden" });
+  const key = String(req.query.key || "");
+  if (!signatureValid(key)) return res.status(400).json({ error: "invalid key" });
+  try {
+    await redis(["DEL", "lic:" + key]);
+    if (req.query.back) return res.redirect(`/admin?secret=${encodeURIComponent(req.query.secret)}`);
+    res.json({ cleared: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "redis error" });
+  }
+});
+
+// Human-friendly dashboard: used keys, devices, last login, OS, version.
+app.get("/admin", async (req, res) => {
+  if (!adminAuthorized(req)) {
+    return res.status(403).send(page("Forbidden", `<h1>Forbidden</h1>
+      <p class="muted">Set ADMIN_SECRET in Render, then open /admin?secret=&lt;value&gt;</p>`));
+  }
+  if (!bindingEnabled) {
+    return res.send(page("Admin", `<h1>License dashboard</h1>
+      <p>Device binding is disabled (no Upstash configured) - nothing is tracked.</p>`));
+  }
+  try {
+    const data = await collectKeyData();
+    const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    const rows = data.keys
+      .sort((a, b) => String(b.lastSeen || "").localeCompare(String(a.lastSeen || "")))
+      .map((k) => `<tr>
+        <td><code>${esc(k.key)}</code></td>
+        <td>${esc(k.activeDevices)}/${DEVICE_LIMIT}</td>
+        <td>${esc((k.lastSeen || "").replace("T", " ").slice(0, 16))}</td>
+        <td>${esc(k.os || "")}</td>
+        <td>${esc(k.appVersion || "")}</td>
+        <td>${esc(k.country || "")}</td>
+        <td>${esc(k.checks || 0)}</td>
+        <td><a href="/api/admin/clear?key=${encodeURIComponent(k.key)}&back=1&secret=${encodeURIComponent(req.query.secret)}"
+               onclick="return confirm('Free all device slots for this key?')">clear devices</a></td>
+      </tr>`).join("");
+    res.send(page("License dashboard", `
+      <h1>License dashboard</h1>
+      <p class="muted">${data.count} used key(s). "Clear devices" frees all slots so the customer can re-activate anywhere.</p>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+        <tr style="text-align:left;color:#9a9aa5">
+          <th>Key</th><th>Devices</th><th>Last login (UTC)</th><th>OS</th><th>App</th><th>Country</th><th>Checks</th><th></th>
+        </tr>
+        ${rows || `<tr><td colspan="8" class="muted">No keys activated yet.</td></tr>`}
+      </table></div>
+      <style>td,th{padding:8px 10px;border-bottom:1px solid #2e2e3e} td a{color:#f47272}</style>`));
+  } catch (err) {
+    console.error(err);
+    res.status(500).send(page("Error", `<h1>Redis error</h1>`));
   }
 });
 

@@ -244,6 +244,10 @@ private:
         inline float process(float input) {
             float output = buffer[writePos];
             filterState = (output * (1.0f - damping)) + (filterState * damping);
+            // Flush denormals: after silence the feedback tail decays into
+            // denormal range, which is extremely slow on x86 and causes
+            // CPU spikes/crackling. Snap tiny values to true zero instead.
+            if (filterState > -1e-15f && filterState < 1e-15f) filterState = 0.0f;
             buffer[writePos] = input + (filterState * feedback);
             writePos = (writePos + 1) % buffer.size();
             return output;
@@ -262,6 +266,7 @@ private:
         
         inline float process(float input) {
             float bufOut = buffer[writePos];
+            if (bufOut > -1e-15f && bufOut < 1e-15f) bufOut = 0.0f; // denormal flush
             float output = -input + bufOut;
             buffer[writePos] = input + (bufOut * feedback);
             writePos = (writePos + 1) % buffer.size();
