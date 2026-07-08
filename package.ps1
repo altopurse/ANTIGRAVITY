@@ -71,7 +71,28 @@ Write-Output "Generating sample sounds..."
 New-ToneWav -Path (Join-Path $dist "sounds\chime.wav") -Freq 587.33 -Duration 1.2
 New-ToneWav -Path (Join-Path $dist "sounds\beep.wav")  -Freq 880.0  -Duration 0.4
 
+# Build the single-file setup wizard (AntigravityVoiceEngine-Setup.exe)
+# Requires Inno Setup: winget install JRSoftware.InnoSetup
+$iscc = @(
+    "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
+    "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe",
+    "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+) | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+if ($iscc) {
+    Write-Output "Compiling installer with Inno Setup..."
+    & $iscc /Qp (Join-Path $root "installer\setup.iss")
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Inno Setup compilation failed."
+        exit 1
+    }
+    Write-Output "Installer: $dist\AntigravityVoiceEngine-Setup.exe"
+} else {
+    Write-Warning "Inno Setup not found - skipping single-exe installer. (winget install JRSoftware.InnoSetup)"
+}
+
 Write-Output "=================================================="
 Write-Output "Package ready in: $dist"
-Write-Output "Ship that folder; users run Install.bat inside it."
+Write-Output "Give users AntigravityVoiceEngine-Setup.exe (one file, ready to run)."
+Write-Output "(The folder with Install.bat still works as a script-based fallback.)"
 Write-Output "=================================================="
