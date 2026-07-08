@@ -18,6 +18,7 @@ public:
         Valid,        // server confirmed the key
         Invalid,      // server rejected the key
         DeviceLimit,  // real key, but activated on too many devices
+        Expired,      // monthly subscription lapsed
         NetworkError  // could not reach the server
     };
 
@@ -35,6 +36,12 @@ public:
 
     // Open the server's purchase page in the default browser.
     void openPurchasePage() const;
+
+    // Update check (async): asks the server for the latest released version.
+    void checkForUpdate();
+    bool isUpdateAvailable() const { return m_updateAvailable.load(); }
+    std::string getUpdateVersion();
+    void openUpdatePage();
 
     Status getStatus() const { return m_status.load(); }
 
@@ -67,4 +74,10 @@ private:
     // Key currently in use (set on successful verify), for reset/release
     std::mutex m_keyMutex;
     std::string m_activeKey;
+
+    // Update-check state (filled by the background thread)
+    std::atomic<bool> m_updateAvailable{false};
+    std::mutex m_updateMutex;
+    std::string m_updateVersion;
+    std::string m_updateUrl;
 };

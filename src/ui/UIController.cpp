@@ -111,6 +111,19 @@ void UIController::render() {
     // Header Title
     ImGui::TextColored(ImVec4(0.22f, 0.74f, 0.97f, 1.0f), "ANTIGRAVITY VOICE ENGINE");
     ImGui::TextDisabled("Desktop-Only Ultra-Low-Latency Voice Changer & Soundboard");
+
+    // Update banner (populated by the background version check)
+    if (m_license && m_license->isUpdateAvailable()) {
+        ImGui::SameLine(ImGui::GetWindowWidth() - 260);
+        std::string label = "Update v" + m_license->getUpdateVersion() + " available - download";
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.50f, 0.25f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.65f, 0.32f, 1.0f));
+        if (ImGui::Button(label.c_str())) {
+            m_license->openUpdatePage();
+        }
+        ImGui::PopStyleColor(2);
+    }
+
     ImGui::Separator();
     ImGui::Spacing();
 
@@ -162,13 +175,13 @@ void UIController::drawActivationScreen() {
     ImGui::SetCursorPosX(startX);
     ImGui::TextColored(ImVec4(0.22f, 0.74f, 0.97f, 1.0f), "ANTIGRAVITY VOICE ENGINE");
     ImGui::SetCursorPosX(startX);
-    ImGui::TextDisabled("One-time license required (2 GBP)");
+    ImGui::TextDisabled("License required: 10 GBP lifetime, or 2 GBP/month");
     ImGui::SetCursorPosX(startX);
     ImGui::Separator();
     ImGui::Spacing();
 
     ImGui::SetCursorPosX(startX);
-    if (ImGui::Button("Buy License (2 GBP)", ImVec2(colWidth, 36))) {
+    if (ImGui::Button("Buy License", ImVec2(colWidth, 36))) {
         m_license->openPurchasePage();
     }
     ImGui::SetCursorPosX(startX);
@@ -206,6 +219,10 @@ void UIController::drawActivationScreen() {
         case LicenseManager::Status::DeviceLimit:
             ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
                                "This key is already active on the maximum number of devices.");
+            break;
+        case LicenseManager::Status::Expired:
+            ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.2f, 1.0f),
+                               "Your monthly subscription has ended. Renew it or buy a lifetime key.");
             break;
         case LicenseManager::Status::NetworkError:
             ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),

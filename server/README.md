@@ -1,8 +1,17 @@
-# License server (Mollie, £2 one-time)
+# License server (Mollie: £10 lifetime / £2 monthly)
 
-Small Node/Express service that sells license keys for the desktop app via
-[Mollie](https://www.mollie.com) and verifies them. Stateless — keys are
-HMAC-signed, no database needed, so Render free-tier restarts/sleeps are harmless.
+Node/Express service that sells license keys for the desktop app via
+[Mollie](https://www.mollie.com) and verifies them. Lifetime keys are
+HMAC-signed and stateless; monthly subscription keys additionally track a
+paid-until window in Upstash Redis, extended by Mollie's recurring-payment
+webhooks. Includes a login-protected admin dashboard (`/admin`) with license
+viewer, per-key usage profiles, and a device manager.
+
+Extra optional env vars (beyond the ones below):
+
+- `ADMIN_SECRET` — enables `/admin` (dashboard login password) and `/api/admin/*`
+- `LATEST_VERSION` + `DOWNLOAD_URL` — power the in-app "update available"
+  banner via `/api/version`; bump them when you publish a new build
 
 ## Deploy on Render
 

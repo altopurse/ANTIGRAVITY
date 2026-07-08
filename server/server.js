@@ -24,8 +24,20 @@ app.use(express.json());
 
 const { MOLLIE_API_KEY, LICENSE_SECRET, BASE_URL } = process.env;
 const PORT = process.env.PORT || 3000;
-const PRICE = { currency: "GBP", value: "2.00" };
 const PRODUCT = "Antigravity Voice Engine license";
+
+// Two plans: one-time lifetime key, or a monthly subscription whose key
+// expires unless Mollie keeps reporting successful recurring payments.
+const PLANS = {
+  life:    { amount: { currency: "GBP", value: "10.00" }, label: "Lifetime" },
+  monthly: { amount: { currency: "GBP", value: "2.00" },  label: "Monthly" },
+};
+// Each paid month grants 35 days so retries/bank delays never lock a payer out.
+const SUB_GRACE_MS = 35 * 24 * 3600 * 1000;
+
+// App update check: bump these env vars in Render when you release a new build.
+const LATEST_VERSION = process.env.LATEST_VERSION || "";
+const DOWNLOAD_URL = process.env.DOWNLOAD_URL || "";
 
 // Device binding (anti key-sharing). Optional: if the Upstash vars are not
 // set, the server falls back to signature-only checks so it still runs.
@@ -124,28 +136,51 @@ function page(title, bodyHtml) {
 // ---------- routes ----------
 
 app.get("/", (req, res) => {
+  const monthlyBtn = bindingEnabled
+    ? `<a class="btn" href="/buy?plan=monthly" style="background:#3a3a4e">Subscribe – £2.00/month</a>`
+    : "";
   res.send(
     page(
       "Antigravity Voice Engine",
       `<h1>Antigravity Voice Engine &amp; Soundboard</h1>
        <p>Real-time voice changer and soundboard for Windows.</p>
-       <p>Buy a one-time license for <strong>£2.00</strong>. After payment you get a
-       license key to paste into the app.</p>
-       <a class="btn" href="/buy">Buy license – £2.00</a>
+       <p>Pay once for a <strong>lifetime key</strong>, or subscribe monthly.
+       After payment you get a license key to paste into the app.</p>
+       <p><a class="btn" href="/buy?plan=life">Buy lifetime – £10.00</a> &nbsp; ${monthlyBtn}</p>
        <p class="muted">Payment is handled by Mollie. Keep your key safe – you'll need it
-       if you reinstall.</p>`
+       if you reinstall. Monthly keys stop working if the subscription ends.</p>`
     )
   );
 });
 
 app.get("/buy", async (req, res, next) => {
   try {
-    const payment = await mollie("POST", "/payments", {
-      amount: PRICE,
-      description: PRODUCT,
+    const plan = req.query.plan === "monthly" ? "monthly" : "life";
+
+    if (plan === "monthly" && !bindingEnabled) {
+      return res.status(503).send(page("Unavailable",
+        `<h1>Monthly plan unavailable</h1><p>Subscriptions need the database
+         (Upstash) configured. <a class="btn" href="/buy?plan=life">Buy lifetime instead</a></p>`));
+    }
+
+    let paymentBody = {
+      amount: PLANS[plan].amount,
+      description: `${PRODUCT} (${PLANS[plan].label.toLowerCase()})`,
       redirectUrl: `${BASE_URL}/key`,
       webhookUrl: `${BASE_URL}/webhook`,
-    });
+    };
+
+    if (plan === "monthly") {
+      // Recurring: a Mollie customer + "first" payment establishes the
+      // mandate; the subscription itself is created once this is paid.
+      const customer = await mollie("POST", "/customers", {
+        name: "Antigravity customer",
+      });
+      paymentBody.customerId = customer.id;
+      paymentBody.sequenceType = "first";
+    }
+
+    const payment = await mollie("POST", "/payments", paymentBody);
     // Point the redirect at this specific payment so /key can look it up.
     await mollie("PATCH", `/payments/${payment.id}`, {
       redirectUrl: `${BASE_URL}/key?pid=${payment.id}`,
@@ -156,6 +191,35 @@ app.get("/buy", async (req, res, next) => {
   }
 });
 
+// After a "first" payment is paid: create the Mollie subscription (starting
+// next month - the first month is the payment just made) and open the key's
+// paid-until window. Idempotent: safe to call from both /key and the webhook.
+async function activateSubscription(payment) {
+  const custId = payment.customerId;
+  if (!custId) return;
+  const key = makeKey(payment.id);
+
+  const existing = await redis(["HGET", "sub:" + key, "subscriptionId"]);
+  if (existing) return;
+
+  const start = new Date(Date.now() + 30 * 24 * 3600 * 1000);
+  const startDate = start.toISOString().slice(0, 10); // YYYY-MM-DD
+  const sub = await mollie("POST", `/customers/${custId}/subscriptions`, {
+    amount: PLANS.monthly.amount,
+    interval: "1 month",
+    startDate,
+    description: `${PRODUCT} (monthly)`,
+    webhookUrl: `${BASE_URL}/webhook`,
+  });
+
+  await redis(["HSET", "sub:" + key,
+    "customerId", custId,
+    "subscriptionId", sub.id,
+    "paidUntil", Date.now() + SUB_GRACE_MS,
+  ]);
+  await redis(["SET", "cust:" + custId, key]); // recurring payments -> key
+}
+
 app.get("/key", async (req, res, next) => {
   try {
     const pid = String(req.query.pid || "");
@@ -165,6 +229,15 @@ app.get("/key", async (req, res, next) => {
     const payment = await mollie("GET", `/payments/${pid}`);
 
     if (payment.status === "paid") {
+      let subNote = "the key never expires.";
+      if (payment.sequenceType === "first" && payment.customerId) {
+        try {
+          await activateSubscription(payment);
+          subNote = "your subscription renews monthly; the key stops working if it lapses.";
+        } catch (err) {
+          console.error("subscription activation failed:", err.message);
+        }
+      }
       return res.send(
         page(
           "Your license key",
@@ -174,7 +247,7 @@ app.get("/key", async (req, res, next) => {
            <p>Open <strong>Antigravity Voice Engine</strong>, paste the key into the
            activation screen and press <strong>Activate</strong>.</p>
            <p class="muted">Save this key somewhere safe – this page won't be reachable
-           forever, but the key never expires.</p>`
+           forever, but ${subNote}</p>`
         )
       );
     }
@@ -255,6 +328,12 @@ app.get("/api/verify", async (req, res) => {
   }
 
   try {
+    // Monthly keys: reject once the paid-until window has lapsed.
+    const paidUntil = await redis(["HGET", "sub:" + key, "paidUntil"]);
+    if (paidUntil !== null && Date.now() > Number(paidUntil)) {
+      return res.json({ valid: false, reason: "expired" });
+    }
+
     const setKey = "lic:" + key;
     // Already activated on this device? Always allow.
     if ((await redis(["SISMEMBER", setKey, device])) === 1) {
@@ -303,14 +382,51 @@ app.get("/api/release", async (req, res) => {
 
 const ADMIN_SECRET = process.env.ADMIN_SECRET || "";
 
-function adminAuthorized(req) {
-  const given = String(req.query.secret || "");
-  return (
-    ADMIN_SECRET.length > 0 &&
-    given.length === ADMIN_SECRET.length &&
-    crypto.timingSafeEqual(Buffer.from(given), Buffer.from(ADMIN_SECRET))
-  );
+function safeEqual(a, b) {
+  return a.length === b.length &&
+         crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
+
+// Session cookie: "adm=<expiryMs>.<HMAC(expiryMs)>", valid 7 days
+function makeSessionCookie() {
+  const exp = String(Date.now() + 7 * 24 * 3600 * 1000);
+  const sig = crypto.createHmac("sha256", LICENSE_SECRET).update("adm" + exp).digest("hex");
+  return `adm=${exp}.${sig}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${7 * 24 * 3600}`;
+}
+
+function hasValidSession(req) {
+  const m = /(?:^|;\s*)adm=(\d+)\.([a-f0-9]{64})/.exec(String(req.headers.cookie || ""));
+  if (!m || Date.now() > Number(m[1])) return false;
+  const expected = crypto.createHmac("sha256", LICENSE_SECRET).update("adm" + m[1]).digest("hex");
+  return safeEqual(m[2], expected);
+}
+
+function adminAuthorized(req) {
+  if (ADMIN_SECRET.length === 0) return false;
+  const given = String(req.query.secret || "");
+  if (given && safeEqual(given, ADMIN_SECRET)) return true;
+  return hasValidSession(req);
+}
+
+// Dashboard login: password form -> signed session cookie
+app.get("/login", (req, res) => {
+  res.send(page("Login", `<h1>Dashboard login</h1>
+    <form method="POST" action="/login">
+      <p><input type="password" name="password" placeholder="Admin password" autofocus
+         style="padding:12px;border-radius:8px;border:1px solid #2e2e3e;background:#1c1c26;color:#f2f2f7;width:100%"></p>
+      <p><button type="submit">Sign in</button></p>
+    </form>
+    <p class="muted">Password = the ADMIN_SECRET environment variable on the server.</p>`));
+});
+
+app.post("/login", (req, res) => {
+  const pw = String(req.body.password || "");
+  if (ADMIN_SECRET.length > 0 && safeEqual(pw, ADMIN_SECRET)) {
+    res.setHeader("Set-Cookie", makeSessionCookie());
+    return res.redirect("/admin");
+  }
+  res.status(403).send(page("Login", `<h1>Wrong password</h1><p><a class="btn" href="/login">Try again</a></p>`));
+});
 
 async function collectKeyData() {
   const keys = (await redis(["SMEMBERS", "keys:used"])) || [];
@@ -320,8 +436,19 @@ async function collectKeyData() {
     // Upstash returns HGETALL as a flat [field, value, ...] array
     const p = {};
     for (let i = 0; i + 1 < profile.length; i += 2) p[profile[i]] = profile[i + 1];
+
+    // Plan/status from the subscription record (absent = lifetime)
+    const paidUntil = await redis(["HGET", "sub:" + k, "paidUntil"]);
+    const plan = paidUntil === null ? "lifetime" : "monthly";
+    const status =
+      plan === "lifetime" ? "active"
+      : Date.now() > Number(paidUntil) ? "expired" : "active";
+
     out.push({
       key: k,
+      plan,
+      status,
+      paidUntil: paidUntil === null ? "" : new Date(Number(paidUntil)).toISOString(),
       activeDevices: await redis(["SCARD", "lic:" + k]),
       ...p,
     });
@@ -351,7 +478,7 @@ app.get("/api/admin/clear", async (req, res) => {
   if (!signatureValid(key)) return res.status(400).json({ error: "invalid key" });
   try {
     await redis(["DEL", "lic:" + key]);
-    if (req.query.back) return res.redirect(`/admin?secret=${encodeURIComponent(req.query.secret)}`);
+    if (req.query.back) return res.redirect("/admin"); // session cookie carries auth
     res.json({ cleared: true });
   } catch (err) {
     console.error(err);
@@ -359,11 +486,10 @@ app.get("/api/admin/clear", async (req, res) => {
   }
 });
 
-// Human-friendly dashboard: used keys, devices, last login, OS, version.
+// Human-friendly dashboard: plans, status, devices, last login, OS, version.
 app.get("/admin", async (req, res) => {
   if (!adminAuthorized(req)) {
-    return res.status(403).send(page("Forbidden", `<h1>Forbidden</h1>
-      <p class="muted">Set ADMIN_SECRET in Render, then open /admin?secret=&lt;value&gt;</p>`));
+    return res.redirect("/login");
   }
   if (!bindingEnabled) {
     return res.send(page("Admin", `<h1>License dashboard</h1>
@@ -373,38 +499,78 @@ app.get("/admin", async (req, res) => {
     const data = await collectKeyData();
     const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    const monthly = data.keys.filter((k) => k.plan === "monthly");
+    const activeSubs = monthly.filter((k) => k.status === "active").length;
     const rows = data.keys
       .sort((a, b) => String(b.lastSeen || "").localeCompare(String(a.lastSeen || "")))
       .map((k) => `<tr>
         <td><code>${esc(k.key)}</code></td>
+        <td>${esc(k.plan)}</td>
+        <td style="color:${k.status === "active" ? "#5fd18a" : "#f47272"}">${esc(k.status)}${
+          k.paidUntil ? `<br><span class="muted" style="font-size:0.75rem">until ${esc(k.paidUntil.slice(0, 10))}</span>` : ""}</td>
         <td>${esc(k.activeDevices)}/${DEVICE_LIMIT}</td>
         <td>${esc((k.lastSeen || "").replace("T", " ").slice(0, 16))}</td>
         <td>${esc(k.os || "")}</td>
         <td>${esc(k.appVersion || "")}</td>
         <td>${esc(k.country || "")}</td>
         <td>${esc(k.checks || 0)}</td>
-        <td><a href="/api/admin/clear?key=${encodeURIComponent(k.key)}&back=1&secret=${encodeURIComponent(req.query.secret)}"
+        <td><a href="/api/admin/clear?key=${encodeURIComponent(k.key)}&back=1"
                onclick="return confirm('Free all device slots for this key?')">clear devices</a></td>
       </tr>`).join("");
     res.send(page("License dashboard", `
       <h1>License dashboard</h1>
-      <p class="muted">${data.count} used key(s). "Clear devices" frees all slots so the customer can re-activate anywhere.</p>
+      <p class="muted">
+        <strong style="color:#f2f2f7">${data.count}</strong> key(s) sold ·
+        <strong style="color:#f2f2f7">${data.count - monthly.length}</strong> lifetime ·
+        <strong style="color:#f2f2f7">${activeSubs}</strong> active subscription(s) ·
+        "Clear devices" frees all slots so the customer can re-activate anywhere.
+      </p>
       <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.85rem">
         <tr style="text-align:left;color:#9a9aa5">
-          <th>Key</th><th>Devices</th><th>Last login (UTC)</th><th>OS</th><th>App</th><th>Country</th><th>Checks</th><th></th>
+          <th>Key</th><th>Plan</th><th>Status</th><th>Devices</th><th>Last login (UTC)</th>
+          <th>OS</th><th>App</th><th>Country</th><th>Checks</th><th></th>
         </tr>
-        ${rows || `<tr><td colspan="8" class="muted">No keys activated yet.</td></tr>`}
+        ${rows || `<tr><td colspan="10" class="muted">No keys activated yet.</td></tr>`}
       </table></div>
-      <style>td,th{padding:8px 10px;border-bottom:1px solid #2e2e3e} td a{color:#f47272}</style>`));
+      <style>td,th{padding:8px 10px;border-bottom:1px solid #2e2e3e} td a{color:#f47272} .muted{color:#9a9aa5}</style>`));
   } catch (err) {
     console.error(err);
     res.status(500).send(page("Error", `<h1>Redis error</h1>`));
   }
 });
 
-// Mollie requires a webhook endpoint; state is derived from the API on demand,
-// so acknowledging is all that's needed here.
-app.post("/webhook", (req, res) => res.sendStatus(200));
+// Mollie webhook: posted {id} whenever a payment changes state. Recurring
+// subscription payments arrive ONLY here (no user browser involved), so this
+// is what keeps monthly keys alive. Always answers 200 so Mollie stops retrying.
+app.post("/webhook", async (req, res) => {
+  res.sendStatus(200); // ack first; processing errors are ours to log
+  try {
+    const id = String(req.body.id || "");
+    if (!/^tr_[a-zA-Z0-9]+$/.test(id) || !bindingEnabled) return;
+    const payment = await mollie("GET", `/payments/${id}`);
+    if (payment.status !== "paid") return;
+
+    if (payment.sequenceType === "first" && payment.customerId) {
+      // Backup path in case the buyer never returns to /key
+      await activateSubscription(payment);
+    } else if (payment.sequenceType === "recurring" && payment.customerId) {
+      // Renewal: extend the paid-until window of this customer's key
+      const key = await redis(["GET", "cust:" + payment.customerId]);
+      if (key) {
+        await redis(["HSET", "sub:" + key, "paidUntil", Date.now() + SUB_GRACE_MS]);
+        console.log(`Renewal OK for ${key.slice(0, 12)}...`);
+      }
+    }
+  } catch (err) {
+    console.error("webhook processing failed:", err.message);
+  }
+});
+
+// App update check. Set LATEST_VERSION (e.g. "1.4.0") and DOWNLOAD_URL in
+// Render when you publish a new build; the app shows an update banner.
+app.get("/api/version", (req, res) => {
+  res.json({ version: LATEST_VERSION, url: DOWNLOAD_URL });
+});
 
 app.use((err, req, res, next) => {
   console.error(err);

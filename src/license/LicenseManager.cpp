@@ -26,7 +26,7 @@ static const wchar_t* kServerHost = L"antigravity-license.onrender.com";
 static const char*    kBuyUrl     = "https://antigravity-license.onrender.com/buy";
 
 #ifndef APP_VERSION
-#define APP_VERSION "1.2.0"
+#define APP_VERSION "1.3.0"
 #endif
 
 // Short OS tag for the per-license usage profile, e.g. "Win11-26200".
@@ -124,6 +124,11 @@ void LicenseManager::verifyAsync(std::string key, bool saveOnSuccess) {
             // saved key (they may free up a slot) but lock the app.
             m_hadSavedKey.store(false);
             m_status.store(Status::DeviceLimit);
+        } else if (result == 3) {
+            // Monthly subscription lapsed. Keep the saved key on disk (a
+            // renewal payment revalidates it) but lock the app for now.
+            m_hadSavedKey.store(false);
+            m_status.store(Status::Expired);
         } else if (result == 0) {
             // Server explicitly rejected it: drop any saved copy and lock.
             deleteSavedKey();
@@ -254,6 +259,7 @@ int LicenseManager::verifyOnline(const std::string& key) {
 
     if (body.find("\"valid\":true") != std::string::npos)       return 1;
     if (body.find("device_limit") != std::string::npos)         return 2;
+    if (body.find("expired") != std::string::npos)              return 3;
     if (body.find("\"valid\":false") != std::string::npos)      return 0;
     return -1; // empty/garbage (proxy error page, etc.) = network error
 #else
@@ -269,5 +275,56 @@ void LicenseManager::releaseOnline(const std::string& key) {
     httpGetBody(path); // best-effort; response intentionally ignored
 #else
     (void)key;
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// Update check: /api/version returns {"version":"x.y.z","url":"https://..."}.
+// A non-empty version different from this build's shows an in-app banner.
+// ---------------------------------------------------------------------------
+
+// Pulls "field":"value" out of a flat JSON body (no JSON library needed)
+static std::string extractJsonString(const std::string& body, const std::string& field) {
+    std::string needle = "\"" + field + "\":\"";
+    size_t p = body.find(needle);
+    if (p == std::string::npos) return "";
+    p += needle.size();
+    size_t end = body.find('"', p);
+    if (end == std::string::npos) return "";
+    return body.substr(p, end - p);
+}
+
+void LicenseManager::checkForUpdate() {
+    std::thread([this]() {
+#ifdef _WIN32
+        std::string body = httpGetBody(L"/api/version");
+        std::string version = extractJsonString(body, "version");
+        std::string url = extractJsonString(body, "url");
+        if (!version.empty() && version != APP_VERSION) {
+            {
+                std::lock_guard<std::mutex> lock(m_updateMutex);
+                m_updateVersion = version;
+                m_updateUrl = url;
+            }
+            m_updateAvailable.store(true);
+        }
+#endif
+    }).detach();
+}
+
+std::string LicenseManager::getUpdateVersion() {
+    std::lock_guard<std::mutex> lock(m_updateMutex);
+    return m_updateVersion;
+}
+
+void LicenseManager::openUpdatePage() {
+#ifdef _WIN32
+    std::string url;
+    {
+        std::lock_guard<std::mutex> lock(m_updateMutex);
+        url = m_updateUrl;
+    }
+    if (url.empty()) url = kBuyUrl; // fall back to the site
+    ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 #endif
 }

@@ -106,6 +106,7 @@ int main(int, char**) {
     // for previously activated users even if the server is unreachable)
     auto licenseManager = std::make_shared<LicenseManager>();
     licenseManager->init();
+    licenseManager->checkForUpdate();
 
     // Create UI Controller
     auto uiController = std::make_unique<UIController>(audioEngine, dspGraph, soundboard, licenseManager, config);
