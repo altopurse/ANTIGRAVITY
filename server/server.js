@@ -333,13 +333,17 @@ app.get("/api/verify", async (req, res) => {
     if (paidUntil !== null && Date.now() > Number(paidUntil)) {
       return res.json({ valid: false, reason: "expired" });
     }
+    // Tell the app which plan this is so it can show it next to Reset.
+    const planFields = paidUntil === null
+      ? { plan: "lifetime" }
+      : { plan: "monthly", paidUntil: new Date(Number(paidUntil)).toISOString() };
 
     const setKey = "lic:" + key;
     // Already activated on this device? Always allow.
     if ((await redis(["SISMEMBER", setKey, device])) === 1) {
       await redis(["SADD", "keys:used", key]);
       recordProfile(req, key, device);
-      return res.json({ valid: true });
+      return res.json({ valid: true, ...planFields });
     }
     // New device: allow only if under the per-key limit.
     const count = await redis(["SCARD", setKey]);
@@ -347,7 +351,7 @@ app.get("/api/verify", async (req, res) => {
       await redis(["SADD", setKey, device]);
       await redis(["SADD", "keys:used", key]); // permanent used-key registry
       recordProfile(req, key, device);
-      return res.json({ valid: true });
+      return res.json({ valid: true, ...planFields });
     }
     return res.json({ valid: false, reason: "device_limit" });
   } catch (err) {

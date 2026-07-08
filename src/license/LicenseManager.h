@@ -45,6 +45,12 @@ public:
 
     Status getStatus() const { return m_status.load(); }
 
+    // "lifetime" or "monthly" (empty until the first successful verify with
+    // device binding enabled on the server).
+    std::string getPlan();
+    // ISO date string, only meaningful when getPlan() == "monthly".
+    std::string getPaidUntil();
+
     // True when the main app should be usable.
     bool isUnlocked() const {
         Status s = m_status.load();
@@ -62,8 +68,9 @@ private:
     static void saveKey(const std::string& key);
     static void deleteSavedKey();
 
-    // Returns 1 = valid, 0 = invalid, -1 = network/transport error
-    static int verifyOnline(const std::string& key);
+    // Returns 1 = valid, 0 = invalid, 2 = device limit, 3 = expired, -1 = network error.
+    // Not static: fills m_plan/m_paidUntil from the response on success.
+    int verifyOnline(const std::string& key);
     // Frees this device's slot server-side (fire and forget)
     static void releaseOnline(const std::string& key);
 
@@ -74,6 +81,11 @@ private:
     // Key currently in use (set on successful verify), for reset/release
     std::mutex m_keyMutex;
     std::string m_activeKey;
+
+    // Plan info from the last successful verify
+    std::mutex m_planMutex;
+    std::string m_plan;
+    std::string m_paidUntil;
 
     // Update-check state (filled by the background thread)
     std::atomic<bool> m_updateAvailable{false};

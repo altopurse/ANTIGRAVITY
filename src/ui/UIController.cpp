@@ -392,6 +392,19 @@ void UIController::drawSettingsPanel() {
 
     // License management
     ImGui::TextDisabled("License");
+
+    std::string plan = m_license->getPlan();
+    if (plan == "lifetime") {
+        ImGui::TextColored(ImVec4(0.39f, 0.86f, 0.39f, 1.0f), "Plan: Lifetime");
+    } else if (plan == "monthly") {
+        std::string until = m_license->getPaidUntil();
+        std::string label = "Plan: Monthly";
+        if (until.size() >= 10) label += " (renews " + until.substr(0, 10) + ")";
+        ImGui::TextColored(ImVec4(0.39f, 0.75f, 0.86f, 1.0f), "%s", label.c_str());
+    } else {
+        ImGui::TextDisabled("Plan: unknown");
+    }
+
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.45f, 0.16f, 0.16f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.65f, 0.20f, 0.20f, 1.0f));
     if (ImGui::Button("Reset License Key", ImVec2(-1, 0))) {

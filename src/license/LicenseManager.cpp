@@ -201,6 +201,17 @@ void LicenseManager::deleteSavedKey() {
     fs::remove(licenseFilePath(), ec);
 }
 
+// Pulls "field":"value" out of a flat JSON body (no JSON library needed)
+static std::string extractJsonString(const std::string& body, const std::string& field) {
+    std::string needle = "\"" + field + "\":\"";
+    size_t p = body.find(needle);
+    if (p == std::string::npos) return "";
+    p += needle.size();
+    size_t end = body.find('"', p);
+    if (end == std::string::npos) return "";
+    return body.substr(p, end - p);
+}
+
 // ---------------------------------------------------------------------------
 // HTTPS GET via WinHTTP. Generous receive timeout because a sleeping Render
 // free instance can take ~50s to cold-start before answering.
@@ -259,7 +270,12 @@ int LicenseManager::verifyOnline(const std::string& key) {
 
     std::string body = httpGetBody(path);
 
-    if (body.find("\"valid\":true") != std::string::npos)       return 1;
+    if (body.find("\"valid\":true") != std::string::npos) {
+        std::lock_guard<std::mutex> lock(m_planMutex);
+        m_plan = extractJsonString(body, "plan");           // "lifetime" or "monthly"
+        m_paidUntil = extractJsonString(body, "paidUntil");  // set only for monthly
+        return 1;
+    }
     if (body.find("device_limit") != std::string::npos)         return 2;
     if (body.find("expired") != std::string::npos)              return 3;
     if (body.find("\"valid\":false") != std::string::npos)      return 0;
@@ -268,6 +284,16 @@ int LicenseManager::verifyOnline(const std::string& key) {
     (void)key;
     return -1;
 #endif
+}
+
+std::string LicenseManager::getPlan() {
+    std::lock_guard<std::mutex> lock(m_planMutex);
+    return m_plan;
+}
+
+std::string LicenseManager::getPaidUntil() {
+    std::lock_guard<std::mutex> lock(m_planMutex);
+    return m_paidUntil;
 }
 
 void LicenseManager::releaseOnline(const std::string& key) {
@@ -284,17 +310,6 @@ void LicenseManager::releaseOnline(const std::string& key) {
 // Update check: /api/version returns {"version":"x.y.z","url":"https://..."}.
 // A non-empty version different from this build's shows an in-app banner.
 // ---------------------------------------------------------------------------
-
-// Pulls "field":"value" out of a flat JSON body (no JSON library needed)
-static std::string extractJsonString(const std::string& body, const std::string& field) {
-    std::string needle = "\"" + field + "\":\"";
-    size_t p = body.find(needle);
-    if (p == std::string::npos) return "";
-    p += needle.size();
-    size_t end = body.find('"', p);
-    if (end == std::string::npos) return "";
-    return body.substr(p, end - p);
-}
 
 void LicenseManager::checkForUpdate() {
     std::thread([this]() {
