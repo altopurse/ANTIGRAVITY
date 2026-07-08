@@ -56,15 +56,41 @@ In [src/license/LicenseManager.cpp](../src/license/LicenseManager.cpp) set
 `kServerHost` to your Render hostname (no `https://`, no trailing slash), then
 rebuild + repackage. The Buy button and key verification then use your server.
 
+## Website / download
+
+`GET /` is the full public landing page (hero, feature list, both pricing
+cards) — this is the URL to give out; it's the whole site, no separate
+frontend needed. `GET /download` streams the installer straight from
+`server/public/downloads/AntigravityVoiceEngine-Setup.exe`.
+
+That file is checked into the repo (not gitignored) so the running server
+always has something to serve. To publish a new build:
+
+```
+powershell -ExecutionPolicy Bypass -File package.ps1   # builds + copies the exe here
+git add server/public/downloads/AntigravityVoiceEngine-Setup.exe
+git commit -m "Publish vX.Y.Z installer"
+git push origin main                                    # Render auto-deploys
+```
+
+If the file is ever missing, `/download` shows a friendly "not available yet"
+page instead of a broken link.
+
 ## Endpoints
 
 | Route | Purpose |
 |---|---|
-| `GET /` | Purchase page with Buy button |
-| `GET /buy` | Creates the £2 Mollie payment, redirects to Mollie checkout |
+| `GET /` | Landing page: download button + pricing |
+| `GET /download` | Serves the Windows installer |
+| `GET /buy?plan=life\|monthly` | Creates the Mollie payment, redirects to checkout |
 | `GET /key?pid=...` | Post-payment page; shows the license key once paid |
-| `GET /api/verify?key=...` | Used by the app; returns `{"valid":true\|false}` |
-| `POST /webhook` | Mollie webhook (acknowledged; state is read from the API) |
+| `GET /api/verify?key=...` | Used by the app; returns `{"valid":true\|false,...}` |
+| `GET /api/release` | App's "Reset License Key": frees this device's slot |
+| `GET /api/unbindall` | App's "Unbind All Devices": frees every slot for a key |
+| `GET /api/version` | Update check: `{"version":"x.y.z","url":"..."}` |
+| `GET /login` / `POST /login` | Admin dashboard sign-in |
+| `GET /admin` | Login-protected dashboard: keys, plans, devices, usage |
+| `POST /webhook` | Mollie webhook (payment + subscription events) |
 
 ## Test it end to end (no real money)
 

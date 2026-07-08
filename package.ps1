@@ -91,7 +91,18 @@ if ($LASTEXITCODE -ne 0) {
 # The sounds were only needed as compile inputs; ship a clean single file.
 Remove-Item -Recurse -Force (Join-Path $dist "sounds")
 
+# Publish the installer into the website (server/public/downloads/): the
+# live site at /download always serves whatever was committed here last.
+$publishDir = Join-Path $root "server\public\downloads"
+New-Item -ItemType Directory -Force -Path $publishDir | Out-Null
+Copy-Item -Force (Join-Path $dist "AntigravityVoiceEngine-Setup.exe") -Destination $publishDir
+
 Write-Output "=================================================="
 Write-Output "Package ready: $dist\AntigravityVoiceEngine-Setup.exe"
-Write-Output "That single file is all you upload/ship."
+Write-Output "Also copied to: $publishDir\AntigravityVoiceEngine-Setup.exe"
+Write-Output ""
+Write-Output "To publish this build on the website:"
+Write-Output "  git add server/public/downloads/AntigravityVoiceEngine-Setup.exe"
+Write-Output "  git commit -m `"Publish vX.Y.Z installer`""
+Write-Output "  git push origin main   (Render auto-deploys)"
 Write-Output "=================================================="

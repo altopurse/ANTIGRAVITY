@@ -1,8 +1,9 @@
 // Antigravity Voice Engine - license server
 //
 // Flow:
-//   GET  /            -> purchase page with a Buy button
-//   GET  /buy         -> creates a 2.00 GBP Mollie payment, redirects to Mollie checkout
+//   GET  /            -> landing page: download button + pricing
+//   GET  /download    -> serves the Windows installer (server/public/downloads/)
+//   GET  /buy         -> creates a Mollie payment for the chosen plan, redirects to checkout
 //   GET  /key?pid=... -> Mollie redirects the buyer here; if paid, shows their license key
 //   GET  /api/verify?key=... -> the desktop app calls this; returns { valid: true|false }
 //   POST /webhook     -> Mollie status pings (acknowledged, nothing stored)
@@ -17,6 +18,8 @@
 
 const express = require("express");
 const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
 
 const app = express();
 app.use(express.urlencoded({ extended: true }));
@@ -116,20 +119,39 @@ async function mollie(method, path, body) {
 
 // ---------- tiny HTML shell ----------
 
-function page(title, bodyHtml) {
+function page(title, bodyHtml, opts = {}) {
+  const width = opts.wide ? 760 : 560;
   return `<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${title}</title>
 <style>
-  body{font-family:system-ui,sans-serif;background:#0f0f14;color:#f2f2f7;display:flex;justify-content:center;padding:48px 16px}
-  main{max-width:560px;width:100%}
-  h1{color:#38b0f8;font-size:1.5rem}
+  *{box-sizing:border-box}
+  body{font-family:system-ui,sans-serif;background:#0f0f14;color:#f2f2f7;display:flex;justify-content:center;
+    padding:48px 16px;margin:0}
+  main{max-width:${width}px;width:100%}
+  h1{color:#38b0f8;font-size:1.6rem;margin-bottom:4px}
+  h2{color:#f2f2f7;font-size:1.15rem;margin:32px 0 12px}
   a.btn,button{display:inline-block;background:#2a70a6;color:#fff;border:none;border-radius:8px;
-    padding:12px 24px;font-size:1rem;text-decoration:none;cursor:pointer}
+    padding:12px 24px;font-size:1rem;text-decoration:none;cursor:pointer;font-family:inherit}
   a.btn:hover,button:hover{background:#38b0f8}
+  a.btn.big{padding:16px 36px;font-size:1.15rem;font-weight:600}
+  a.btn.ghost{background:#1c1c26;border:1px solid #2e2e3e}
+  a.btn.ghost:hover{background:#26263a}
   code.key{display:block;background:#1c1c26;border:1px solid #2e2e3e;border-radius:8px;padding:16px;
     font-size:1.05rem;word-break:break-all;margin:16px 0;user-select:all}
   p.muted{color:#9a9aa5}
+  .hero{text-align:center;padding:24px 0 8px}
+  .hero p.tagline{font-size:1.05rem;color:#c7c7d1;max-width:460px;margin:8px auto 28px}
+  .pricing{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:20px 0}
+  @media (max-width:520px){.pricing{grid-template-columns:1fr}}
+  .card{background:#161620;border:1px solid #2e2e3e;border-radius:12px;padding:22px;text-align:center}
+  .card .price{font-size:1.8rem;font-weight:700;color:#f2f2f7;margin:6px 0 14px}
+  .card .price span{font-size:0.95rem;color:#9a9aa5;font-weight:400}
+  .features{list-style:none;padding:0;margin:0;display:grid;grid-template-columns:1fr 1fr;gap:10px 20px}
+  .features li{color:#c7c7d1;font-size:0.95rem;padding-left:22px;position:relative}
+  .features li::before{content:"✓";position:absolute;left:0;color:#38b0f8;font-weight:700}
+  @media (max-width:520px){.features{grid-template-columns:1fr}}
+  footer{margin-top:40px;color:#5a5a68;font-size:0.85rem;text-align:center}
 </style></head><body><main>${bodyHtml}</main></body></html>`;
 }
 
@@ -137,20 +159,63 @@ function page(title, bodyHtml) {
 
 app.get("/", (req, res) => {
   const monthlyBtn = bindingEnabled
-    ? `<a class="btn" href="/buy?plan=monthly" style="background:#3a3a4e">Subscribe – £2.00/month</a>`
+    ? `<div class="card">
+         <div>Monthly</div>
+         <div class="price">£2<span>/month</span></div>
+         <a class="btn ghost" href="/buy?plan=monthly">Subscribe</a>
+       </div>`
     : "";
   res.send(
     page(
       "Antigravity Voice Engine",
-      `<h1>Antigravity Voice Engine &amp; Soundboard</h1>
-       <p>Real-time voice changer and soundboard for Windows.</p>
-       <p>Pay once for a <strong>lifetime key</strong>, or subscribe monthly.
-       After payment you get a license key to paste into the app.</p>
-       <p><a class="btn" href="/buy?plan=life">Buy lifetime – £10.00</a> &nbsp; ${monthlyBtn}</p>
-       <p class="muted">Payment is handled by Mollie. Keep your key safe – you'll need it
-       if you reinstall. Monthly keys stop working if the subscription ends.</p>`
+      `<div class="hero">
+         <h1>Antigravity Voice Engine &amp; Soundboard</h1>
+         <p class="tagline">Real-time, ultra-low-latency voice changer and soundboard for Windows.
+         Reshape your voice, add effects, and trigger sounds live in Discord, games, and calls.</p>
+         <a class="btn big" href="/download">Download for Windows</a>
+         <p class="muted" style="margin-top:14px">Windows may show a SmartScreen warning on
+         first run - click "More info" then "Run anyway". A license key is needed to unlock the app.</p>
+       </div>
+
+       <h2>What's inside</h2>
+       <ul class="features">
+         <li>8 real-time DSP effects (pitch, EQ, compressor, reverb, robotizer &amp; more)</li>
+         <li>Soundboard with global hotkeys and per-clip volume</li>
+         <li>Works with any virtual audio cable for Discord/games</li>
+         <li>Low-latency WASAPI exclusive mode</li>
+         <li>Auto-update checks</li>
+         <li>Settings and soundboard saved between sessions</li>
+       </ul>
+
+       <h2>Get a license</h2>
+       <div class="pricing">
+         <div class="card">
+           <div>Lifetime</div>
+           <div class="price">£10<span> once</span></div>
+           <a class="btn" href="/buy?plan=life">Buy lifetime</a>
+         </div>
+         ${monthlyBtn}
+       </div>
+       <p class="muted">Payment is handled by Mollie. After paying you get a license key -
+       paste it into the app's activation screen. Keep it safe, you'll need it if you reinstall.
+       Monthly keys stop working if the subscription ends.</p>
+
+       <footer>Antigravity Voice Engine</footer>`,
+      { wide: true }
     )
   );
+});
+
+// Serves the installer built by package.ps1 (server/public/downloads/).
+// Kept as a real file on disk (checked into the repo) rather than a
+// redirect, so there's exactly one URL to give out that always works.
+app.get("/download", (req, res) => {
+  const file = path.join(__dirname, "public", "downloads", "AntigravityVoiceEngine-Setup.exe");
+  if (!fs.existsSync(file)) {
+    return res.status(404).send(page("Not available",
+      `<h1>Download not available yet</h1><p class="muted">Check back soon.</p>`));
+  }
+  res.download(file, "AntigravityVoiceEngine-Setup.exe");
 });
 
 app.get("/buy", async (req, res, next) => {
