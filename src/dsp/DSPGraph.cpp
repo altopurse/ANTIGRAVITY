@@ -36,7 +36,10 @@ void DSPGraph::moveNodeUp(size_t index) {
 
 void DSPGraph::moveNodeDown(size_t index) {
     std::lock_guard<std::mutex> lock(m_mutex);
-    if (index < m_nodes.size() - 1) {
+    // Guard against underflow: if m_nodes is empty, m_nodes.size() - 1 would
+    // wrap around (size_t is unsigned) and the old check would pass with an
+    // out-of-bounds index, causing undefined behavior.
+    if (!m_nodes.empty() && index + 1 < m_nodes.size()) {
         std::swap(m_nodes[index], m_nodes[index + 1]);
     }
 }

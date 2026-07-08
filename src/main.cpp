@@ -9,6 +9,7 @@
 #include "audio/Mixer.h"
 #include "soundboard/Soundboard.h"
 #include "ui/UIController.h"
+#include "license/LicenseManager.h"
 
 #include <iostream>
 #include <memory>
@@ -73,8 +74,16 @@ int main(int, char**) {
         std::cerr << "Warning: Could not initialize Audio Engine context!" << std::endl;
     }
 
+    // Auto-load every sound stored in the app's "sounds" folder
+    soundboard->loadSoundsFromAppFolder();
+
+    // License check (saved key verifies in the background; app stays usable
+    // for previously activated users even if the server is unreachable)
+    auto licenseManager = std::make_shared<LicenseManager>();
+    licenseManager->init();
+
     // Create UI Controller
-    auto uiController = std::make_unique<UIController>(audioEngine, dspGraph, soundboard);
+    auto uiController = std::make_unique<UIController>(audioEngine, dspGraph, soundboard, licenseManager);
 
     // Main GUI Loop
     while (!glfwWindowShouldClose(window)) {

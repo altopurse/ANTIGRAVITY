@@ -185,10 +185,12 @@ private:
     double m_sampleRate = 48000.0;
     std::vector<float> m_delayBuffer[2]; // Stereo buffers
     int m_writePos = 0;
-    float m_readPos1 = 0.0f;
-    float m_readPos2 = 0.0f;
+    float m_phase = 0.0f;     // Tap-1 delay in frames (sawtooth over 0..m_delayLength)
     int m_bufferSize = 8192;
     int m_delayLength = 2048; // Size of overlap window
+
+    // Linear-interpolated read `delay` frames behind the write head
+    float readTap(int channel, float delay) const;
 };
 
 // 5. Robotizer (Ring Modulator)

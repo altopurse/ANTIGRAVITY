@@ -1,0 +1,15 @@
+{
+  "name": "antigravity-license-server",
+  "version": "1.0.0",
+  "description": "Mollie payment + license key server for Antigravity Voice Engine",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

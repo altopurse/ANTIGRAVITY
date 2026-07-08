@@ -1,0 +1,17 @@
+# Render blueprint: deploy the license server with "New -> Blueprint" in Render.
+# (Or create the Web Service manually; see server/README.md)
+services:
+  - type: web
+    name: antigravity-license
+    runtime: node
+    rootDir: server
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: MOLLIE_API_KEY
+        sync: false # paste your Mollie test_/live_ key in the dashboard
+      - key: LICENSE_SECRET
+        generateValue: true
+      - key: BASE_URL
+        sync: false # set to https://<this-service>.onrender.com after first deploy

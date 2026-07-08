@@ -141,9 +141,19 @@ bool AudioEngine::start(const ma_device_id* inputId, const ma_device_id* primary
     // Prepare processing graph and soundboard mixer
     m_dspGraph->prepare(m_sampleRate);
     m_mixer->prepare(m_sampleRate, m_channels);
-    m_monitorRingBuffer.resize(16384);
+
+    // Size the monitor ring buffer from the actual period so large buffer
+    // settings still leave room for the 3-period jitter cushion plus slack.
+    size_t periodSamples = static_cast<size_t>((m_sampleRate * m_bufferSizeMs.load()) / 1000.0) * m_channels;
+    m_monitorRingBuffer.resize(std::max<size_t>(16384, periodSamples * 8));
     m_monitorRingBuffer.clear();
     m_monitorJitterBufferReady = false;
+
+    // Sized generously (250ms) so the audio callback never allocates.
+    size_t scratchMaxSamples = static_cast<size_t>(m_sampleRate * 0.25) * m_channels;
+    if (m_soundboardScratch.size() < scratchMaxSamples) {
+        m_soundboardScratch.resize(scratchMaxSamples);
+    }
 
     // 2. Initialize Monitor Playback Device (if requested and distinct)
     if (monitorOutputId != nullptr) {
@@ -172,7 +182,13 @@ bool AudioEngine::start(const ma_device_id* inputId, const ma_device_id* primary
     result = ma_device_start(&m_primaryDevice);
     if (result != MA_SUCCESS) {
         std::cerr << "AudioEngine: Failed to start primary audio stream. Error: " << result << std::endl;
-        shutdown();
+        // Tear down only the devices; keep the context alive so the user can retry.
+        ma_device_uninit(&m_primaryDevice);
+        m_primaryDeviceInitialized = false;
+        if (m_monitorDeviceInitialized) {
+            ma_device_uninit(&m_monitorDevice);
+            m_monitorDeviceInitialized = false;
+        }
         return false;
     }
 
@@ -229,26 +245,37 @@ void AudioEngine::primaryCallback(void* pOutput, const void* pInput, ma_uint32 f
         m_micLevel = 0.0f;
     }
 
-    // 2. Process DSP Graph on the copied mic buffer (in-place)
-    m_dspGraph->process(outBuf, frameCount, m_channels);
+    // 2. Process DSP Graph on the copied mic buffer (in-place).
+    // The graph expects the TOTAL interleaved sample count, not frames.
+    m_dspGraph->process(outBuf, totalSamples, m_channels);
 
-    // 3. Mix in the soundboard (and apply microphone ducking if playing)
-    bool isSoundboardPlaying = m_mixer->processAndMix(outBuf, frameCount, m_channels);
-    
-    // Optional ducking implementation: if soundboard is playing, duck the mic part
-    if (isSoundboardPlaying && m_mixer->m_duckingEnabled && inBuf != nullptr) {
-        // Simple ducking is handled
+    // 3. Mix in the soundboard (mic ducking is applied inside the mixer).
+    // m_soundboardScratch receives the soundboard's own mix (zeros when
+    // nothing is playing) so clip playback can reach the Voice Monitor
+    // output even if mic loopback monitoring is off.
+    // Pre-sized with margin in start(); this is just a safety net matching
+    // the same convention Mixer::processAndMix uses for its own buffers.
+    if (m_soundboardScratch.size() < totalSamples) {
+        m_soundboardScratch.resize(totalSamples);
     }
+    m_mixer->processAndMix(outBuf, frameCount, m_channels, m_soundboardScratch.data());
 
     // 4. Monitor processed output level (VU)
     updateLevel(m_outputLevel, outBuf, totalSamples);
 
-    // 5. If live monitoring is enabled, write to the monitor ring buffer
-    if (m_monitorEnabled.load(std::memory_order_relaxed) && m_monitorDeviceInitialized) {
-        size_t written = m_monitorRingBuffer.write(outBuf, totalSamples);
-        if (written < totalSamples) {
+    // 5. Feed the monitor (headphone) output continuously:
+    //    - Voice Loopback ON  -> full mix (processed voice + soundboard)
+    //    - Voice Loopback OFF -> soundboard only (silence while idle)
+    //    Writing every block keeps the jitter buffer primed, so soundboard
+    //    hits are heard immediately regardless of the loopback toggle and
+    //    there are no start/stop races between the two audio threads.
+    if (m_monitorDeviceInitialized) {
+        const float* monitorSrc = m_monitorEnabled.load(std::memory_order_relaxed)
+                                      ? outBuf
+                                      : m_soundboardScratch.data();
+        size_t written = m_monitorRingBuffer.write(monitorSrc, totalSamples);
+        if (written < totalSamples)
             m_dbgOverflows.fetch_add(1, std::memory_order_relaxed);
-        }
     }
 }
 
@@ -257,32 +284,34 @@ void AudioEngine::monitorCallback(void* pOutput, ma_uint32 frameCount) {
     float* outBuf = static_cast<float*>(pOutput);
     size_t totalSamples = frameCount * m_channels;
 
-    if (!m_monitorEnabled.load(std::memory_order_relaxed)) {
-        std::fill(outBuf, outBuf + totalSamples, 0.0f);
-        m_monitorJitterBufferReady = false;
-        return;
-    }
-
     size_t available = m_monitorRingBuffer.getAvailableRead();
     m_dbgRingBufferLevel.store(available, std::memory_order_relaxed);
-    
-    // Warm-up/pre-roll cushion: wait for 3 blocks of audio (e.g. 30ms) to accumulate 
+
+    // Warm-up/pre-roll cushion: wait for 3 blocks of audio to accumulate
     // to absorb any thread scheduling jitter between input and output clocks.
-    size_t targetCushion = totalSamples * 3;
+    // Clamped to half the ring so a monitor device negotiating a large
+    // period can never demand a cushion the buffer cannot hold.
+    size_t targetCushion = std::min(totalSamples * 3, m_monitorRingBuffer.getCapacity() / 2);
     if (!m_monitorJitterBufferReady.load(std::memory_order_relaxed)) {
         if (available >= targetCushion) {
             m_monitorJitterBufferReady.store(true, std::memory_order_relaxed);
         } else {
-            // Output silence while accumulating cushion
             std::fill(outBuf, outBuf + totalSamples, 0.0f);
             return;
         }
     }
 
-    // Read from the ring buffer filled by primary callback
+    // Latency guard: if clock drift between the two devices lets the backlog
+    // grow past twice the cushion, drop the excess so monitoring latency
+    // stays bounded instead of creeping up until the ring overflows.
+    if (available > targetCushion * 2) {
+        m_monitorRingBuffer.discard(available - targetCushion);
+    }
+
+    // Drain the ring buffer that the primary callback filled.
     size_t readCount = m_monitorRingBuffer.read(outBuf, totalSamples);
-    
-    // If underflow, zero the rest and reset pre-roll so we buffer again instead of cracking
+
+    // Underflow: silence the remainder and re-arm the pre-roll.
     if (readCount < totalSamples) {
         std::fill(outBuf + readCount, outBuf + totalSamples, 0.0f);
         m_monitorJitterBufferReady.store(false, std::memory_order_relaxed);
@@ -292,9 +321,8 @@ void AudioEngine::monitorCallback(void* pOutput, ma_uint32 frameCount) {
     // Apply monitoring volume slider
     float vol = m_monitorVolume.load(std::memory_order_relaxed);
     if (vol != 1.0f) {
-        for (size_t i = 0; i < totalSamples; ++i) {
+        for (size_t i = 0; i < totalSamples; ++i)
             outBuf[i] *= vol;
-        }
     }
 }
 

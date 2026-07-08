@@ -41,7 +41,23 @@ file(MAKE_DIRECTORY ${MINIAUDIO_DIR})
 set(MINIAUDIO_H ${MINIAUDIO_DIR}/miniaudio.h)
 if(NOT EXISTS ${MINIAUDIO_H})
     message(STATUS "Downloading miniaudio.h...")
-    file(DOWNLOAD https://raw.githubusercontent.com/mackron/miniaudio/master/miniaudio.h ${MINIAUDIO_H})
+    file(DOWNLOAD https://raw.githubusercontent.com/mackron/miniaudio/master/miniaudio.h ${MINIAUDIO_H}
+         STATUS MINIAUDIO_DOWNLOAD_STATUS
+         TLS_VERIFY ON)
+    list(GET MINIAUDIO_DOWNLOAD_STATUS 0 MINIAUDIO_DOWNLOAD_CODE)
+    if(NOT MINIAUDIO_DOWNLOAD_CODE EQUAL 0)
+        file(REMOVE ${MINIAUDIO_H})
+        message(FATAL_ERROR "Failed to download miniaudio.h (status: ${MINIAUDIO_DOWNLOAD_STATUS}). "
+                             "Check your internet connection/firewall, or manually download it from "
+                             "https://raw.githubusercontent.com/mackron/miniaudio/master/miniaudio.h "
+                             "and place it at ${MINIAUDIO_H}")
+    endif()
+    file(SIZE ${MINIAUDIO_H} MINIAUDIO_FILE_SIZE)
+    if(MINIAUDIO_FILE_SIZE LESS 1000000)
+        message(FATAL_ERROR "Downloaded miniaudio.h looks incomplete/corrupt (only ${MINIAUDIO_FILE_SIZE} bytes). "
+                             "Delete ${MINIAUDIO_H} and re-run CMake, or download it manually from "
+                             "https://raw.githubusercontent.com/mackron/miniaudio/master/miniaudio.h")
+    endif()
 endif()
 
 # Find OpenGL
@@ -86,10 +102,12 @@ target_link_libraries(voice-changer PRIVATE
 
 # Windows-specific configurations
 if(WIN32)
-    # Miniaudio requirements on Windows
+    # ole32/uuid/winmm: miniaudio; winhttp: license verification; shell32: open browser
     target_link_libraries(voice-changer PRIVATE
         ole32
         uuid
         winmm
+        winhttp
+        shell32
     )
 endif()

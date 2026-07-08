@@ -12,28 +12,33 @@
 UIController::UIController(
     std::shared_ptr<AudioEngine> audioEngine,
     std::shared_ptr<DSPGraph> dspGraph,
-    std::shared_ptr<Soundboard> soundboard
-) : m_audioEngine(audioEngine), m_dspGraph(dspGraph), m_soundboard(soundboard) {
+    std::shared_ptr<Soundboard> soundboard,
+    std::shared_ptr<LicenseManager> license
+) : m_audioEngine(audioEngine), m_dspGraph(dspGraph), m_soundboard(soundboard), m_license(license) {
     applyDarkModernTheme();
 }
 
 UIController::~UIController() {}
 
 void UIController::render() {
+    // Gate the whole app behind license activation
+    if (m_license && !m_license->isUnlocked()) {
+        drawActivationScreen();
+        return;
+    }
+
     // Poll global soundboard hotkeys in the UI thread
     m_soundboard->updateHotkeys();
 
     // Check if we are binding a hotkey
     if (m_bindingClip != nullptr) {
 #ifdef _WIN32
-        // Scan virtual keys 1..254 to see if any are down
-        for (int k = 1; k < 255; ++k) {
-            // Avoid mapping left/right mouse clicks (VK_LBUTTON = 1, VK_RBUTTON = 2)
-            if (k > 2 && (GetAsyncKeyState(k) & 0x8000)) {
+        // Scan virtual keys 8..254 (skip mouse buttons VK 1-6 and undefined 7)
+        for (int k = 8; k < 255; ++k) {
+            if (GetAsyncKeyState(k) & 0x8000) {
+                // setHotkey marks the key as already-down, so no Sleep needed
                 m_soundboard->setHotkey(m_bindingClip, k);
                 m_bindingClip = nullptr;
-                // Wait briefly to avoid bouncing
-                Sleep(200);
                 break;
             }
         }
@@ -86,11 +91,94 @@ void UIController::render() {
     ImGui::End();
 }
 
+void UIController::drawActivationScreen() {
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->WorkPos);
+    ImGui::SetNextWindowSize(viewport->WorkSize);
+    ImGui::Begin("ActivationWindow", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
+
+    // Center a fixed-width column
+    float colWidth = 460.0f;
+    float startX = (viewport->WorkSize.x - colWidth) * 0.5f;
+    if (startX < 0) startX = 0;
+    ImGui::SetCursorPosY(viewport->WorkSize.y * 0.22f);
+
+    ImGui::SetCursorPosX(startX);
+    ImGui::TextColored(ImVec4(0.22f, 0.74f, 0.97f, 1.0f), "ANTIGRAVITY VOICE ENGINE");
+    ImGui::SetCursorPosX(startX);
+    ImGui::TextDisabled("One-time license required (2 GBP)");
+    ImGui::SetCursorPosX(startX);
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    ImGui::SetCursorPosX(startX);
+    if (ImGui::Button("Buy License (2 GBP)", ImVec2(colWidth, 36))) {
+        m_license->openPurchasePage();
+    }
+    ImGui::SetCursorPosX(startX);
+    ImGui::TextDisabled("Opens the purchase page in your browser. After paying,");
+    ImGui::SetCursorPosX(startX);
+    ImGui::TextDisabled("copy the license key it shows and paste it below.");
+    ImGui::Spacing();
+
+    ImGui::SetCursorPosX(startX);
+    ImGui::SetNextItemWidth(colWidth);
+    ImGui::InputTextWithHint("##licensekey", "ANTI-XXXXXXXXXX-XXXXXXXXXXXXXXXXXXXX",
+                             m_licenseKeyInput, sizeof(m_licenseKeyInput));
+
+    LicenseManager::Status status = m_license->getStatus();
+    bool checking = (status == LicenseManager::Status::Checking);
+
+    ImGui::SetCursorPosX(startX);
+    ImGui::BeginDisabled(checking);
+    if (ImGui::Button("ACTIVATE", ImVec2(colWidth, 36))) {
+        m_license->activate(m_licenseKeyInput);
+    }
+    ImGui::EndDisabled();
+
+    ImGui::Spacing();
+    ImGui::SetCursorPosX(startX);
+    switch (status) {
+        case LicenseManager::Status::Checking:
+            ImGui::TextColored(ImVec4(0.86f, 0.78f, 0.39f, 1.0f),
+                               "Verifying... (can take up to a minute if the server was asleep)");
+            break;
+        case LicenseManager::Status::Invalid:
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
+                               "That key is not valid. Check for typos and try again.");
+            break;
+        case LicenseManager::Status::NetworkError:
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                               "Could not reach the license server. Check your internet and retry.");
+            break;
+        default:
+            ImGui::TextDisabled("Enter your license key to unlock the app.");
+            break;
+    }
+
+    ImGui::End();
+}
+
 void UIController::drawSettingsPanel() {
-    ImGui::BeginChild("SettingsChild", ImVec2(0, 360), true);
+    ImGui::BeginChild("SettingsChild", ImVec2(0, 430), true);
     ImGui::Text("Device Configuration");
     ImGui::Separator();
     ImGui::Spacing();
+
+    // Quick routing / output setup instructions
+    if (ImGui::CollapsingHeader("Setup Guide - How to route your voice")) {
+        ImGui::TextWrapped("1. Install a virtual audio cable (free VB-CABLE from vb-audio.com/Cable), then reboot.");
+        ImGui::TextWrapped("2. Mic Input = your real microphone.");
+        ImGui::TextWrapped("3. Primary Output = 'CABLE Input (VB-Audio Virtual Cable)'. This carries your processed voice to other apps.");
+        ImGui::TextWrapped("4. Voice Monitor = your headphones. Soundboard clips always play here; enable Voice Loopback below to also hear your own processed voice.");
+        ImGui::TextWrapped("5. Press START AUDIO ENGINE.");
+        ImGui::TextWrapped("6. In Discord / your game, pick 'CABLE Output (VB-Audio Virtual Cable)' as the microphone.");
+        ImGui::TextWrapped("No virtual cable? Set Primary Output to your headphones just to try the effects locally.");
+        ImGui::Separator();
+        ImGui::Spacing();
+    }
 
     const auto& inputs = m_audioEngine->getInputDevices();
     const auto& outputs = m_audioEngine->getOutputDevices();
@@ -99,6 +187,9 @@ void UIController::drawSettingsPanel() {
     std::string previewInput = inputs.empty() ? "None Detected" : (m_selectedInputIdx < inputs.size() ? inputs[m_selectedInputIdx].name : "Select Input");
     if (ImGui::BeginCombo("Mic Input", previewInput.c_str())) {
         for (int i = 0; i < inputs.size(); ++i) {
+            // PushID: devices can share identical (truncated) names, which
+            // would otherwise collide ImGui IDs and break selection.
+            ImGui::PushID(i);
             const bool isSelected = (m_selectedInputIdx == i);
             if (ImGui::Selectable(inputs[i].name.c_str(), isSelected)) {
                 m_selectedInputIdx = i;
@@ -106,6 +197,7 @@ void UIController::drawSettingsPanel() {
             if (isSelected) {
                 ImGui::SetItemDefaultFocus();
             }
+            ImGui::PopID();
         }
         ImGui::EndCombo();
     }
@@ -114,6 +206,7 @@ void UIController::drawSettingsPanel() {
     std::string previewOutput = outputs.empty() ? "None Detected" : (m_selectedOutputIdx < outputs.size() ? outputs[m_selectedOutputIdx].name : "Select Output");
     if (ImGui::BeginCombo("Primary Output", previewOutput.c_str())) {
         for (int i = 0; i < outputs.size(); ++i) {
+            ImGui::PushID(i);
             const bool isSelected = (m_selectedOutputIdx == i);
             if (ImGui::Selectable(outputs[i].name.c_str(), isSelected)) {
                 m_selectedOutputIdx = i;
@@ -121,6 +214,7 @@ void UIController::drawSettingsPanel() {
             if (isSelected) {
                 ImGui::SetItemDefaultFocus();
             }
+            ImGui::PopID();
         }
         ImGui::EndCombo();
     }
@@ -129,6 +223,7 @@ void UIController::drawSettingsPanel() {
     std::string previewMonitor = outputs.empty() ? "None Detected" : (m_selectedMonitorIdx < outputs.size() ? outputs[m_selectedMonitorIdx].name : "Select Monitor");
     if (ImGui::BeginCombo("Voice Monitor", previewMonitor.c_str())) {
         for (int i = 0; i < outputs.size(); ++i) {
+            ImGui::PushID(i);
             const bool isSelected = (m_selectedMonitorIdx == i);
             if (ImGui::Selectable(outputs[i].name.c_str(), isSelected)) {
                 m_selectedMonitorIdx = i;
@@ -136,6 +231,7 @@ void UIController::drawSettingsPanel() {
             if (isSelected) {
                 ImGui::SetItemDefaultFocus();
             }
+            ImGui::PopID();
         }
         ImGui::EndCombo();
     }
@@ -152,9 +248,10 @@ void UIController::drawSettingsPanel() {
     ImGui::SetItemTooltip("Exclusive mode bypasses Windows Mixer for lowest possible latency (<10ms), but blocks other apps from using this audio device.");
 
     int bufferMs = m_audioEngine->getBufferSizeMs();
-    if (ImGui::SliderInt("Buffer size (ms)", &bufferMs, 2, 40)) {
+    if (ImGui::SliderInt("Buffer size (ms)", &bufferMs, 5, 100)) {
         m_audioEngine->setBufferSizeMs(bufferMs);
     }
+    ImGui::SetItemTooltip("Higher = more stable (no crackling), lower = less latency.\nTakes effect the next time the engine is started.");
 
     ImGui::Spacing();
     ImGui::Separator();
@@ -207,7 +304,7 @@ void UIController::drawSettingsPanel() {
     if (ImGui::Checkbox("Voice Loopback (Monitoring)", &monitor)) {
         m_audioEngine->setMonitorEnabled(monitor);
     }
-    ImGui::SetItemTooltip("Toggle hearing your own voice through the Monitor output device.");
+    ImGui::SetItemTooltip("Toggle hearing your OWN VOICE through the Monitor output.\nSoundboard clips play through the Monitor regardless of this setting\n(as long as a Voice Monitor device is selected and the engine is running).");
 
     float monVol = m_audioEngine->getMonitorVolume();
     if (ImGui::SliderFloat("Monitor Vol", &monVol, 0.0f, 1.5f, "%.2f")) {
@@ -286,6 +383,22 @@ void UIController::drawDSPGraphPanel() {
         auto& node = nodes[i];
         ImGui::PushID(static_cast<int>(i));
 
+        // Enable toggle + reorder arrows are drawn BEFORE the header on the
+        // same row (no overlap tricks), so every control is always clickable.
+        ImGui::Checkbox("##enabled", &node->isEnabled());
+        ImGui::SetItemTooltip("Enable / bypass this effect.");
+        ImGui::SameLine();
+        if (ImGui::ArrowButton("##up", ImGuiDir_Up)) {
+            m_dspGraph->moveNodeUp(i);
+        }
+        ImGui::SetItemTooltip("Move earlier in the chain.");
+        ImGui::SameLine();
+        if (ImGui::ArrowButton("##down", ImGuiDir_Down)) {
+            m_dspGraph->moveNodeDown(i);
+        }
+        ImGui::SetItemTooltip("Move later in the chain.");
+        ImGui::SameLine();
+
         // Background styling depending on state
         bool enabled = node->isEnabled();
         if (enabled) {
@@ -294,25 +407,11 @@ void UIController::drawDSPGraphPanel() {
             ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.15f, 0.15f, 0.15f, 0.5f));
         }
 
-        // Draw Collapsible header for the effect settings
         char label[128];
         snprintf(label, sizeof(label), "%s##node_hdr", node->getName());
         bool isOpen = ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen);
-        
-        ImGui::PopStyleColor();
 
-        // Checkbox & Reordering Controls in same line
-        ImGui::SameLine(ImGui::GetWindowWidth() - 150);
-        ImGui::Checkbox("On", &node->isEnabled());
-        
-        ImGui::SameLine(ImGui::GetWindowWidth() - 90);
-        if (ImGui::ArrowButton("##up", ImGuiDir_Up)) {
-            m_dspGraph->moveNodeUp(i);
-        }
-        ImGui::SameLine(ImGui::GetWindowWidth() - 60);
-        if (ImGui::ArrowButton("##down", ImGuiDir_Down)) {
-            m_dspGraph->moveNodeDown(i);
-        }
+        ImGui::PopStyleColor();
 
         if (isOpen) {
             ImGui::Indent(15.0f);
@@ -397,12 +496,27 @@ void UIController::drawSoundboardPanel() {
     if (ImGui::Button("ADD AUDIO FILE")) {
         std::string path = openFileDialog();
         if (!path.empty()) {
-            size_t lastSlash = path.find_last_of("\\/");
-            std::string name = (lastSlash == std::string::npos) ? path : path.substr(lastSlash + 1);
-            m_soundboard->addSound(path, name);
+            // Copies the file into the app's "sounds" folder and loads it
+            // from there, so the clip survives if the original moves.
+            m_soundboard->importSound(path);
         }
     }
-    
+    if (ImGui::IsItemHovered()) {
+        static std::string soundsDir = Soundboard::getSoundsDirectory();
+        ImGui::SetTooltip("Files are copied into:\n%s\nSounds in that folder load automatically at startup.", soundsDir.c_str());
+    }
+
+    ImGui::Separator();
+
+    // Mic ducking controls (lower the mic while a sound is playing)
+    auto mixer = m_soundboard->getMixer();
+    ImGui::Checkbox("Duck Mic", &mixer->m_duckingEnabled);
+    ImGui::SetItemTooltip("Lower your microphone while a sound is playing.");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(140.0f);
+    ImGui::SliderFloat("Mic level##duck", &mixer->m_duckingAmount, 0.0f, 1.0f, "%.2f");
+    ImGui::SetItemTooltip("Mic volume while sounds play (0 = muted, 1 = unchanged).");
+
     ImGui::Separator();
     ImGui::Spacing();
 
@@ -468,10 +582,19 @@ void UIController::drawSoundboardPanel() {
             ImGui::SetTooltip("Left-click to bind key. Right-click card/button to clear.");
         }
         
-        // Right click to clear hotkey
+        // Right click for hotkey/removal actions
         if (ImGui::BeginPopupContextWindow()) {
             if (ImGui::MenuItem("Clear Hotkey")) {
                 m_soundboard->clearHotkey(clip);
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Remove from Board")) {
+                m_soundboard->stopClip(clip);
+                m_soundboard->removeSound(clip, /*deleteFile=*/false);
+            }
+            if (ImGui::MenuItem("Remove & Delete File")) {
+                m_soundboard->stopClip(clip);
+                m_soundboard->removeSound(clip, /*deleteFile=*/true);
             }
             ImGui::EndPopup();
         }

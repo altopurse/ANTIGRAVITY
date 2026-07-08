@@ -1,0 +1,12 @@
+# CMake build output
+build/
+
+# Generated distributable package
+dist/
+
+# ImGui runtime layout file
+imgui.ini
+
+# License server dependencies
+server/node_modules/
+

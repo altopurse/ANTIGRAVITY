@@ -14,15 +14,34 @@ public:
 
     // Register a sound file
     std::shared_ptr<SoundBoardClip> addSound(const std::string& filepath, const std::string& name);
+
+    // Copy an external file into the app "sounds" folder (removing the
+    // dependency on its original location) and load it from there.
+    std::shared_ptr<SoundBoardClip> importSound(const std::string& sourcePath);
+
+    // Load every audio file already present in the app "sounds" folder
+    void loadSoundsFromAppFolder();
+
+    // Folder next to the executable where imported sounds are stored
+    static std::string getSoundsDirectory();
+
     void playClip(std::shared_ptr<SoundBoardClip> clip);
     void stopClip(std::shared_ptr<SoundBoardClip> clip);
-    
+
+    // Remove a clip from the board. If deleteFile is true, also deletes the
+    // underlying file from the app "sounds" folder so it won't reload on
+    // the next launch; otherwise it just leaves the board (file stays on disk).
+    void removeSound(std::shared_ptr<SoundBoardClip> clip, bool deleteFile);
+
     // Manage hotkey mapping
     void setHotkey(std::shared_ptr<SoundBoardClip> clip, int key);
     void clearHotkey(std::shared_ptr<SoundBoardClip> clip);
 
     // Get list of clips
     std::vector<std::shared_ptr<SoundBoardClip>>& getClips() { return m_mixer->getClips(); }
+
+    // Access the mixer (for ducking controls in the UI)
+    std::shared_ptr<Mixer> getMixer() { return m_mixer; }
 
     // Helpers to get string names of virtual keys
     static std::string getKeyName(int key);

@@ -87,12 +87,17 @@ private:
     // Buffer for passing processed audio from primary stream to monitoring stream
     RingBuffer m_monitorRingBuffer;
 
+    // Scratch buffer holding just the soundboard's own mix each block (no mic,
+    // no DSP; zeros while idle), sized in start(). Feeds the Voice Monitor
+    // output whenever mic loopback monitoring is turned off.
+    std::vector<float> m_soundboardScratch;
+
     // Configuration
     std::atomic<bool> m_monitorEnabled{false};
     std::atomic<bool> m_monitorJitterBufferReady{false};
     std::atomic<float> m_monitorVolume{0.7f};
     std::atomic<bool> m_exclusiveMode{false};
-    std::atomic<int> m_bufferSizeMs{10}; // 10ms target latency
+    std::atomic<int> m_bufferSizeMs{20}; // 20ms target latency (stable default, avoids crackling)
 
     double m_sampleRate = 48000.0;
     int m_channels = 2;

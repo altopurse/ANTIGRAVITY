@@ -145,83 +145,62 @@ void PitchShifterNode::prepare(double sampleRate) {
     std::fill(m_delayBuffer[0].begin(), m_delayBuffer[0].end(), 0.0f);
     std::fill(m_delayBuffer[1].begin(), m_delayBuffer[1].end(), 0.0f);
     m_writePos = 0;
-    m_readPos1 = 0.0f;
-    m_readPos2 = static_cast<float>(m_delayLength / 2);
+    m_phase = 0.0f;
+}
+
+float PitchShifterNode::readTap(int channel, float delay) const {
+    float pos = static_cast<float>(m_writePos) - delay;
+    if (pos < 0.0f) pos += static_cast<float>(m_bufferSize);
+    int i0 = static_cast<int>(pos);
+    float frac = pos - static_cast<float>(i0);
+    int i1 = i0 + 1;
+    if (i1 >= m_bufferSize) i1 = 0;
+    const std::vector<float>& buf = m_delayBuffer[channel];
+    return (1.0f - frac) * buf[i0] + frac * buf[i1];
 }
 
 void PitchShifterNode::process(float* buffer, size_t numSamples, int numChannels) {
-    if (!m_enabled || m_pitchFactor == 1.0f) return;
+    if (!m_enabled) return;
 
-    float rate = 1.0f - m_pitchFactor;
+    if (m_pitchFactor == 1.0f) {
+        // Passthrough, but keep the delay line fed so engaging the shifter
+        // doesn't replay stale audio from the last time it ran.
+        for (size_t i = 0; i < numSamples; i += numChannels) {
+            for (int c = 0; c < numChannels; ++c) {
+                m_delayBuffer[std::min(c, 1)][m_writePos] = buffer[i + c];
+            }
+            m_writePos = (m_writePos + 1) % m_bufferSize;
+        }
+        return;
+    }
+
+    const float L = static_cast<float>(m_delayLength);
+    const float halfL = L * 0.5f;
+    // Per-frame delay drift: factor < 1 grows the delay, > 1 shrinks it.
+    const float drift = 1.0f - m_pitchFactor;
 
     for (size_t i = 0; i < numSamples; i += numChannels) {
+        // Two taps half a window apart. Triangle weights hit zero exactly
+        // where each tap's delay wraps (0 <-> L), so the wrap never clicks.
+        float d1 = m_phase;
+        float d2 = d1 + halfL;
+        if (d2 >= L) d2 -= L;
+        float w1 = 1.0f - std::abs(2.0f * d1 / L - 1.0f);
+        float w2 = 1.0f - w1;
+
         for (int c = 0; c < numChannels; ++c) {
             int ch = std::min(c, 1);
-            
-            // Write input to delay buffer
             m_delayBuffer[ch][m_writePos] = buffer[i + c];
-            
-            // Read from delay line 1
-            int rPos1_int = static_cast<int>(m_readPos1);
-            float rPos1_frac = m_readPos1 - rPos1_int;
-            int rPos1_next = (rPos1_int + 1) % m_bufferSize;
-            float out1 = (1.0f - rPos1_frac) * m_delayBuffer[ch][rPos1_int] + rPos1_frac * m_delayBuffer[ch][rPos1_next];
 
-            // Read from delay line 2
-            int rPos2_int = static_cast<int>(m_readPos2);
-            float rPos2_frac = m_readPos2 - rPos2_int;
-            int rPos2_next = (rPos2_int + 1) % m_bufferSize;
-            float out2 = (1.0f - rPos2_frac) * m_delayBuffer[ch][rPos2_int] + rPos2_frac * m_delayBuffer[ch][rPos2_next];
-
-            // Calculate crossfade weight based on delay 1 from write pointer
-            float delay1 = static_cast<float>(m_writePos) - m_readPos1;
-            if (delay1 < 0) delay1 += m_bufferSize;
-            
-            // Normalize delay1 to 0..delayLength
-            float w = delay1 / m_delayLength;
-            if (w < 0.0f) w = 0.0f;
-            if (w > 1.0f) w = 1.0f;
-            
-            // Linear crossfade window
-            float weight1 = w;
-            float weight2 = 1.0f - w;
-
-            // Combine
-            float processed = out1 * weight1 + out2 * weight2;
-            
-            // Dry/wet mix
+            float processed = readTap(ch, d1) * w1 + readTap(ch, d2) * w2;
             buffer[i + c] = (1.0f - m_dryWet) * buffer[i + c] + m_dryWet * processed;
         }
 
-        // Advance indices
         m_writePos = (m_writePos + 1) % m_bufferSize;
-        
-        m_readPos1 += m_pitchFactor;
-        if (m_readPos1 >= m_bufferSize) m_readPos1 -= m_bufferSize;
 
-        m_readPos2 += m_pitchFactor;
-        if (m_readPos2 >= m_bufferSize) m_readPos2 -= m_bufferSize;
-
-        // Keep read positions bounded relative to write position to avoid drift
-        float currentDelay1 = static_cast<float>(m_writePos) - m_readPos1;
-        if (currentDelay1 < 0) currentDelay1 += m_bufferSize;
-        
-        if (currentDelay1 >= m_delayLength) {
-            // Delay has grown too large, pull read position closer
-            m_readPos1 = static_cast<float>((m_writePos - 1 + m_bufferSize) % m_bufferSize);
-        } else if (currentDelay1 <= 2.0f) {
-            // Delay has shrunk too small, push read position further
-            m_readPos1 = static_cast<float>((m_writePos - m_delayLength + m_bufferSize) % m_bufferSize);
-        }
-
-        float currentDelay2 = static_cast<float>(m_writePos) - m_readPos2;
-        if (currentDelay2 < 0) currentDelay2 += m_bufferSize;
-
-        if (currentDelay2 >= m_delayLength) {
-            m_readPos2 = static_cast<float>((m_writePos - 1 + m_bufferSize) % m_bufferSize);
-        } else if (currentDelay2 <= 2.0f) {
-            m_readPos2 = static_cast<float>((m_writePos - m_delayLength + m_bufferSize) % m_bufferSize);
-        }
+        m_phase += drift;
+        if (m_phase >= L) m_phase -= L;
+        else if (m_phase < 0.0f) m_phase += L;
     }
 }
 

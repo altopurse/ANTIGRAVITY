@@ -75,6 +75,16 @@ public:
         return toRead;
     }
 
+    // Advance the read cursor without copying (drop samples)
+    size_t discard(size_t count) {
+        size_t available = getAvailableRead();
+        size_t toDiscard = std::min(count, available);
+        if (toDiscard == 0) return 0;
+        size_t readIdx = m_readIndex.load(std::memory_order_relaxed);
+        m_readIndex.store((readIdx + toDiscard) % m_capacity, std::memory_order_release);
+        return toDiscard;
+    }
+
     void clear() {
         m_writeIndex.store(0);
         m_readIndex.store(0);

@@ -2,6 +2,7 @@
 #include "audio/AudioEngine.h"
 #include "dsp/DSPGraph.h"
 #include "soundboard/Soundboard.h"
+#include "license/LicenseManager.h"
 #include <memory>
 #include <string>
 
@@ -10,7 +11,8 @@ public:
     UIController(
         std::shared_ptr<AudioEngine> audioEngine,
         std::shared_ptr<DSPGraph> dspGraph,
-        std::shared_ptr<Soundboard> soundboard
+        std::shared_ptr<Soundboard> soundboard,
+        std::shared_ptr<LicenseManager> license
     );
     ~UIController();
 
@@ -21,6 +23,7 @@ private:
     std::shared_ptr<AudioEngine> m_audioEngine;
     std::shared_ptr<DSPGraph> m_dspGraph;
     std::shared_ptr<Soundboard> m_soundboard;
+    std::shared_ptr<LicenseManager> m_license;
 
     // Device selection state index
     int m_selectedInputIdx = 0;
@@ -34,7 +37,11 @@ private:
     // Hotkey binding state
     std::shared_ptr<SoundBoardClip> m_bindingClip = nullptr;
 
+    // License activation input buffer
+    char m_licenseKeyInput[128] = {0};
+
     // Helpers to draw specific sections
+    void drawActivationScreen();
     void drawSettingsPanel();
     void drawVUMeters();
     void drawDSPGraphPanel();

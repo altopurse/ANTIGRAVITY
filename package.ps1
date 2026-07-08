@@ -1,109 +1,77 @@
-# Create dist directory structure
-New-Item -ItemType Directory -Force -Path "dist"
-New-Item -ItemType Directory -Force -Path "dist/sounds"
+# Builds the distributable "dist" folder from the compiled binary and the
+# installer sources. Run AFTER building:
+#   cmake -S . -B build -G Ninja
+#   cmake --build build
+#   powershell -ExecutionPolicy Bypass -File package.ps1
 
-# Write a quick C++ program to generate standard wav files for the soundboard
-$wavGeneratorSource = @"
-#include <iostream>
-#include <fstream>
-#include <cmath>
-#include <cstdint>
+$ErrorActionPreference = "Stop"
+$root = Split-Path -Parent $MyInvocation.MyCommand.Path
+Set-Location $root
 
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
+$exe = Join-Path $root "build\bin\voice-changer.exe"
+if (-not (Test-Path $exe)) {
+    Write-Error "Binary not found at $exe. Build first: cmake --build build"
+    exit 1
+}
 
-void writeWav(const std::string& filename, double freq, double duration, double sampleRate = 44100.0) {
-    std::ofstream file(filename, std::ios::binary);
-    if (!file) return;
+# Fresh dist folder
+$dist = Join-Path $root "dist"
+if (Test-Path $dist) {
+    Remove-Item -Recurse -Force $dist
+}
+New-Item -ItemType Directory -Force -Path $dist | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $dist "sounds") | Out-Null
 
-    int numSamples = static_cast<int>(duration * sampleRate);
-    int numChannels = 1;
-    int bitsPerSample = 16;
-    int byteRate = sampleRate * numChannels * (bitsPerSample / 8);
-    int blockAlign = numChannels * (bitsPerSample / 8);
-    int subChunk2Size = numSamples * numChannels * (bitsPerSample / 8);
-    int chunkSize = 36 + subChunk2Size;
+# Copy binary + installer files
+Write-Output "Copying binary and installer files..."
+Copy-Item -Force $exe -Destination $dist
+Copy-Item -Force (Join-Path $root "installer\*") -Destination $dist
 
-    // Header
-    file.write("RIFF", 4);
-    file.write(reinterpret_cast<const char*>(&chunkSize), 4);
-    file.write("WAVE", 4);
-    
-    // Subchunk 1 (fmt)
-    file.write("fmt ", 4);
-    int subChunk1Size = 16;
-    file.write(reinterpret_cast<const char*>(&subChunk1Size), 4);
-    uint16_t audioFormat = 1; // PCM
-    file.write(reinterpret_cast<const char*>(&audioFormat), 2);
-    uint16_t channels = numChannels;
-    file.write(reinterpret_cast<const char*>(&channels), 2);
-    uint32_t sRate = sampleRate;
-    file.write(reinterpret_cast<const char*>(&sRate), 4);
-    uint32_t bRate = byteRate;
-    file.write(reinterpret_cast<const char*>(&bRate), 4);
-    uint16_t bAlign = blockAlign;
-    file.write(reinterpret_cast<const char*>(&bAlign), 2);
-    uint16_t bps = bitsPerSample;
-    file.write(reinterpret_cast<const char*>(&bps), 2);
+# Generate the two sample soundboard clips (16-bit mono PCM WAV, pure PowerShell)
+function New-ToneWav {
+    param(
+        [string]$Path,
+        [double]$Freq,
+        [double]$Duration
+    )
+    $sr = 44100
+    $n = [int]($Duration * $sr)
+    $dataSize = $n * 2
 
-    // Subchunk 2 (data)
-    file.write("data", 4);
-    file.write(reinterpret_cast<const char*>(&subChunk2Size), 4);
+    $fs = [System.IO.File]::Create($Path)
+    $bw = New-Object System.IO.BinaryWriter($fs)
+    try {
+        $bw.Write([byte[]][char[]]"RIFF")
+        $bw.Write([int](36 + $dataSize))
+        $bw.Write([byte[]][char[]]"WAVE")
+        $bw.Write([byte[]][char[]]"fmt ")
+        $bw.Write([int]16)          # fmt chunk size
+        $bw.Write([int16]1)         # PCM
+        $bw.Write([int16]1)         # mono
+        $bw.Write([int]$sr)         # sample rate
+        $bw.Write([int]($sr * 2))   # byte rate
+        $bw.Write([int16]2)         # block align
+        $bw.Write([int16]16)        # bits per sample
+        $bw.Write([byte[]][char[]]"data")
+        $bw.Write([int]$dataSize)
 
-    // Generate sine wave samples
-    for (int i = 0; i < numSamples; ++i) {
-        double t = static_cast<double>(i) / sampleRate;
-        double angle = 2.0 * M_PI * freq * t;
-        
-        // Basic envelope (decay) to make it sound pleasant
-        double envelope = exp(-3.0 * t); // Decays over duration
-        int16_t sample = static_cast<int16_t>(32767.0 * sin(angle) * envelope);
-        
-        file.write(reinterpret_cast<const char*>(&sample), 2);
+        for ($i = 0; $i -lt $n; $i++) {
+            $t = $i / $sr
+            # Sine with exponential decay so it sounds like a pleasant chime
+            $s = [math]::Sin(2 * [math]::PI * $Freq * $t) * [math]::Exp(-3 * $t)
+            $bw.Write([int16][math]::Round(32000 * $s))
+        }
+    }
+    finally {
+        $bw.Close()
     }
 }
 
-int main() {
-    writeWav("dist/sounds/chime.wav", 587.33, 1.2); // D5 chime
-    writeWav("dist/sounds/beep.wav", 880.0, 0.4);   // A5 high beep
-    return 0;
-}
-"@
+Write-Output "Generating sample sounds..."
+New-ToneWav -Path (Join-Path $dist "sounds\chime.wav") -Freq 587.33 -Duration 1.2
+New-ToneWav -Path (Join-Path $dist "sounds\beep.wav")  -Freq 880.0  -Duration 0.4
 
-$wavGeneratorSource | Out-File -FilePath "generate_wav.cpp" -Encoding utf8
-
-# Compile wav generator
-g++ -O2 generate_wav.cpp -o generate_wav.exe
-
-# Execute to build the sounds
-.\generate_wav.exe
-
-# Cleanup generator files
-Remove-Item -Force "generate_wav.cpp"
-Remove-Item -Force "generate_wav.exe"
-
-# Copy binary
-Copy-Item -Force "build/bin/voice-changer.exe" -Destination "dist/"
-
-# Write README.txt
-$readmeContent = @"
-========================================================================
-ANTIGRAVITY VOICE ENGINE & SOUNDBOARD - USER GUIDE
-========================================================================
-
-Welcome to the Antigravity Voice Engine!
-
-GETTING STARTED:
-1. Run "Install.ps1" in PowerShell (Right-click -> Run with PowerShell) 
-   to install the application to your local system and create shortcuts.
-2. Ensure you have a virtual audio cable installed (like VB-CABLE) to route
-   your processed voice into Discord, Zoom, or games.
-3. Open the app, select your physical microphone as "Mic Input", select
-   your virtual cable input as "Primary Output", and select your headphones
-   as "Voice Monitor".
-4. Enjoy real-time high-performance voice morphing and soundboards!
-
-For detailed configuration guides, refer to your installed shortcuts.
-"@
-$readmeContent | Out-File -FilePath "dist/README.txt" -Encoding utf8
+Write-Output "=================================================="
+Write-Output "Package ready in: $dist"
+Write-Output "Ship that folder; users run Install.bat inside it."
+Write-Output "=================================================="
