@@ -27,11 +27,41 @@ const PORT = process.env.PORT || 3000;
 const PRICE = { currency: "GBP", value: "2.00" };
 const PRODUCT = "Antigravity Voice Engine license";
 
+// Device binding (anti key-sharing). Optional: if the Upstash vars are not
+// set, the server falls back to signature-only checks so it still runs.
+const { UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN } = process.env;
+const DEVICE_LIMIT = parseInt(process.env.DEVICE_LIMIT || "2", 10);
+const bindingEnabled = !!(UPSTASH_REDIS_REST_URL && UPSTASH_REDIS_REST_TOKEN);
+
 for (const name of ["MOLLIE_API_KEY", "LICENSE_SECRET", "BASE_URL"]) {
   if (!process.env[name]) {
     console.error(`FATAL: missing required environment variable ${name}`);
     process.exit(1);
   }
+}
+
+if (!bindingEnabled) {
+  console.warn(
+    "WARNING: UPSTASH_REDIS_REST_URL/TOKEN not set - device binding is OFF, " +
+    "keys will work on unlimited devices. Set them to stop key-sharing."
+  );
+}
+
+// Upstash Redis REST helper: sends a single command as a JSON array.
+async function redis(cmd) {
+  const res = await fetch(UPSTASH_REDIS_REST_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${UPSTASH_REDIS_REST_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(cmd),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.error) {
+    throw new Error(`Redis ${cmd[0]} -> ${res.status}: ${JSON.stringify(data)}`);
+  }
+  return data.result;
 }
 
 // ---------- license key helpers ----------
@@ -174,12 +204,50 @@ app.get("/key", async (req, res, next) => {
   }
 });
 
-app.get("/api/verify", (req, res) => {
-  const parsed = parseKey(req.query.key);
-  const valid =
-    !!parsed &&
-    crypto.timingSafeEqual(Buffer.from(sign(parsed.paymentId)), Buffer.from(parsed.sig));
-  res.json({ valid });
+// Signature check for a key string (constant-time). Returns true/false.
+function signatureValid(key) {
+  const parsed = parseKey(key);
+  if (!parsed) return false;
+  const expected = Buffer.from(sign(parsed.paymentId));
+  const got = Buffer.from(parsed.sig);
+  return expected.length === got.length && crypto.timingSafeEqual(expected, got);
+}
+
+// Called by the desktop app. Query: key (required), device (fingerprint).
+//   { valid: true }                          -> unlock
+//   { valid: false, reason: "invalid" }      -> bad/forged key
+//   { valid: false, reason: "device_limit" } -> real key, too many devices
+app.get("/api/verify", async (req, res) => {
+  const key = req.query.key;
+  if (!signatureValid(key)) {
+    return res.json({ valid: false, reason: "invalid" });
+  }
+
+  const device = String(req.query.device || "").slice(0, 128);
+
+  // No binding configured, or app didn't send a device id: signature-only.
+  if (!bindingEnabled || !device) {
+    return res.json({ valid: true });
+  }
+
+  try {
+    const setKey = "lic:" + key;
+    // Already activated on this device? Always allow.
+    if ((await redis(["SISMEMBER", setKey, device])) === 1) {
+      return res.json({ valid: true });
+    }
+    // New device: allow only if under the per-key limit.
+    const count = await redis(["SCARD", setKey]);
+    if (count < DEVICE_LIMIT) {
+      await redis(["SADD", setKey, device]);
+      return res.json({ valid: true });
+    }
+    return res.json({ valid: false, reason: "device_limit" });
+  } catch (err) {
+    // Redis outage: don't punish a paying user whose key is math-valid.
+    console.error(err);
+    return res.json({ valid: true, degraded: true });
+  }
 });
 
 // Mollie requires a webhook endpoint; state is derived from the API on demand,

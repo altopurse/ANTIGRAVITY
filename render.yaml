@@ -15,3 +15,11 @@ services:
         generateValue: true
       - key: BASE_URL
         sync: false # set to https://<this-service>.onrender.com after first deploy
+      # Device binding (anti key-sharing). Optional but recommended.
+      # Create a free Upstash Redis DB and paste its REST URL + token.
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
+      - key: DEVICE_LIMIT
+        value: "2" # how many devices one key may activate

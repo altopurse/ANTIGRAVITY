@@ -149,6 +149,10 @@ void UIController::drawActivationScreen() {
             ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
                                "That key is not valid. Check for typos and try again.");
             break;
+        case LicenseManager::Status::DeviceLimit:
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
+                               "This key is already active on the maximum number of devices.");
+            break;
         case LicenseManager::Status::NetworkError:
             ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
                                "Could not reach the license server. Check your internet and retry.");

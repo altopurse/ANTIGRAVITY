@@ -102,12 +102,14 @@ target_link_libraries(voice-changer PRIVATE
 
 # Windows-specific configurations
 if(WIN32)
-    # ole32/uuid/winmm: miniaudio; winhttp: license verification; shell32: open browser
+    # ole32/uuid/winmm: miniaudio; winhttp: license verification;
+    # shell32: open browser; advapi32: read MachineGuid for device binding
     target_link_libraries(voice-changer PRIVATE
         ole32
         uuid
         winmm
         winhttp
         shell32
+        advapi32
     )
 endif()

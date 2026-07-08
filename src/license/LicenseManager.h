@@ -17,6 +17,7 @@ public:
         Checking,     // verification request in flight
         Valid,        // server confirmed the key
         Invalid,      // server rejected the key
+        DeviceLimit,  // real key, but activated on too many devices
         NetworkError  // could not reach the server
     };
 
@@ -43,6 +44,8 @@ public:
 
 private:
     void verifyAsync(std::string key, bool saveOnSuccess);
+    // Stable, opaque per-machine id (hashed Windows MachineGuid)
+    static std::string deviceId();
     static std::string licenseFilePath();
     static std::string loadSavedKey();
     static void saveKey(const std::string& key);

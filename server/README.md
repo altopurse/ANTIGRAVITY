@@ -21,6 +21,26 @@ HMAC-signed, no database needed, so Render free-tier restarts/sleeps are harmles
    - `BASE_URL` — the service's public URL, e.g. `https://antigravity-license.onrender.com`
      (you know it after the first deploy; set it and redeploy).
 
+### Optional: device binding (stop key-sharing)
+
+Without this, a key works on unlimited machines (buyers could share it). To bind
+each key to a limited number of devices:
+
+1. Create a free [Upstash](https://upstash.com) account → **Create Database** →
+   Redis (any region). On the database page, copy the **REST URL** and
+   **REST token** (the "REST API" section, not the Redis TCP URL).
+2. Add these env vars to the Render service:
+   - `UPSTASH_REDIS_REST_URL` — the REST URL
+   - `UPSTASH_REDIS_REST_TOKEN` — the REST token
+   - `DEVICE_LIMIT` — max devices per key (default `2`)
+3. Redeploy.
+
+The desktop app sends a hashed Windows MachineGuid as the device id. The first
+`DEVICE_LIMIT` machines to activate a key are remembered; further machines get
+`{"valid":false,"reason":"device_limit"}`. If Upstash is unreachable, the server
+falls back to signature-only so paying users are never locked out. Leaving these
+vars unset disables binding entirely (server logs a warning).
+
 ## Point the desktop app at it
 
 In [src/license/LicenseManager.cpp](../src/license/LicenseManager.cpp) set

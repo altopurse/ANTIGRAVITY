@@ -10,6 +10,10 @@
 #include <windows.h>
 #include <winhttp.h>
 #include <shellapi.h>
+// Some MinGW header sets omit this flag; its value is fixed in the Windows ABI.
+#ifndef RRF_SUBKEY_WOW6464KEY
+#define RRF_SUBKEY_WOW6464KEY 0x00010000
+#endif
 #endif
 
 namespace fs = std::filesystem;
@@ -61,6 +65,11 @@ void LicenseManager::verifyAsync(std::string key, bool saveOnSuccess) {
             if (saveOnSuccess) saveKey(key);
             m_hadSavedKey.store(true);
             m_status.store(Status::Valid);
+        } else if (result == 2) {
+            // Real key, but this machine is over the device limit. Keep the
+            // saved key (they may free up a slot) but lock the app.
+            m_hadSavedKey.store(false);
+            m_status.store(Status::DeviceLimit);
         } else if (result == 0) {
             // Server explicitly rejected it: drop any saved copy and lock.
             deleteSavedKey();
@@ -77,6 +86,30 @@ void LicenseManager::verifyAsync(std::string key, bool saveOnSuccess) {
 // Storage: %LOCALAPPDATA%/AntigravityVoiceEngine/license.key
 // (same folder the installer uses, so the key survives reinstalls)
 // ---------------------------------------------------------------------------
+
+// Stable per-machine fingerprint: Windows MachineGuid (unique per OS install),
+// FNV-1a hashed to a short hex string so we never transmit the raw GUID.
+std::string LicenseManager::deviceId() {
+    std::string raw = "unknown";
+#ifdef _WIN32
+    char buf[256];
+    DWORD sz = sizeof(buf);
+    // Force the 64-bit registry view so a 32-bit build reads the same value.
+    if (RegGetValueA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Cryptography",
+                     "MachineGuid", RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY,
+                     nullptr, buf, &sz) == ERROR_SUCCESS) {
+        raw = buf;
+    }
+#endif
+    uint64_t h = 1469598103934665603ULL; // FNV-1a offset basis
+    for (unsigned char c : raw) {
+        h ^= c;
+        h *= 1099511628211ULL; // FNV prime
+    }
+    char out[17];
+    snprintf(out, sizeof(out), "%016llx", static_cast<unsigned long long>(h));
+    return std::string(out);
+}
 
 std::string LicenseManager::licenseFilePath() {
     const char* base = std::getenv("LOCALAPPDATA");
@@ -114,9 +147,13 @@ void LicenseManager::deleteSavedKey() {
 
 int LicenseManager::verifyOnline(const std::string& key) {
 #ifdef _WIN32
-    // The key alphabet is [A-Za-z0-9_-], safe to embed in a URL directly.
+    // The key alphabet is [A-Za-z0-9_-] and the device id is hex, both safe
+    // to embed in a URL directly.
+    std::string dev = deviceId();
     std::wstring path = L"/api/verify?key=";
     path.append(key.begin(), key.end());
+    path += L"&device=";
+    path.append(dev.begin(), dev.end());
 
     int result = -1;
 
@@ -149,8 +186,9 @@ int LicenseManager::verifyOnline(const std::string& key) {
             if (body.size() > 4096) break; // response is tiny; cap defensively
         }
 
-        if (body.find("\"valid\":true") != std::string::npos)       result = 1;
-        else if (body.find("\"valid\":false") != std::string::npos) result = 0;
+        if (body.find("\"valid\":true") != std::string::npos)         result = 1;
+        else if (body.find("device_limit") != std::string::npos)      result = 2;
+        else if (body.find("\"valid\":false") != std::string::npos)   result = 0;
         // anything else (proxy error page, etc.) stays -1 = network error
     }
 
