@@ -34,6 +34,11 @@ public:
     // on the server, then locks the app so a key must be entered again.
     void reset();
 
+    // "Unbind All Devices": frees every device slot for the current key on
+    // the server (all PCs), then re-verifies so this PC re-registers. Use
+    // after hitting the device limit from reinstalls or replaced machines.
+    void unbindAllDevices();
+
     // Open the server's purchase page in the default browser.
     void openPurchasePage() const;
 

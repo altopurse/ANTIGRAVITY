@@ -27,6 +27,10 @@ static const wchar_t* kServerHost = L"antigravity-license.onrender.com";
 // the user actually gets to choose instead of silently defaulting to one.
 static const char*    kBuyUrl     = "https://antigravity-license.onrender.com/";
 
+#ifdef _WIN32
+static std::string httpGetBody(const std::wstring& path); // defined below
+#endif
+
 #ifndef APP_VERSION
 #define APP_VERSION "1.3.0"
 #endif
@@ -105,6 +109,27 @@ void LicenseManager::reset() {
     }
 }
 
+void LicenseManager::unbindAllDevices() {
+    std::string key;
+    {
+        std::lock_guard<std::mutex> lock(m_keyMutex);
+        key = m_activeKey;
+    }
+    if (key.empty()) key = loadSavedKey();
+    if (key.empty()) return;
+
+    std::thread([this, key]() {
+#ifdef _WIN32
+        std::string q = "/api/unbindall?key=" + key;
+        std::wstring path(q.begin(), q.end());
+        httpGetBody(path);
+#endif
+        // Re-verify so this PC immediately re-registers (and the plan
+        // display refreshes). Also recovers from the DeviceLimit lock.
+        verifyAsync(key, /*saveOnSuccess=*/true);
+    }).detach();
+}
+
 void LicenseManager::verifyAsync(std::string key, bool saveOnSuccess) {
     bool expected = false;
     if (!m_busy.compare_exchange_strong(expected, true)) return; // one check at a time
@@ -123,7 +148,12 @@ void LicenseManager::verifyAsync(std::string key, bool saveOnSuccess) {
             m_status.store(Status::Valid);
         } else if (result == 2) {
             // Real key, but this machine is over the device limit. Keep the
-            // saved key (they may free up a slot) but lock the app.
+            // saved key (they may free up a slot) but lock the app. Remember
+            // the key so "Unbind All Devices & Retry" can act on it.
+            {
+                std::lock_guard<std::mutex> lock(m_keyMutex);
+                m_activeKey = key;
+            }
             m_hadSavedKey.store(false);
             m_status.store(Status::DeviceLimit);
         } else if (result == 3) {

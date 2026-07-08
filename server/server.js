@@ -204,17 +204,32 @@ async function activateSubscription(payment) {
 
   const start = new Date(Date.now() + 30 * 24 * 3600 * 1000);
   const startDate = start.toISOString().slice(0, 10); // YYYY-MM-DD
-  const sub = await mollie("POST", `/customers/${custId}/subscriptions`, {
-    amount: PLANS.monthly.amount,
-    interval: "1 month",
-    startDate,
-    description: `${PRODUCT} (monthly)`,
-    webhookUrl: `${BASE_URL}/webhook`,
-  });
+  let subId = null;
+  try {
+    const sub = await mollie("POST", `/customers/${custId}/subscriptions`, {
+      amount: PLANS.monthly.amount,
+      interval: "1 month",
+      startDate,
+      description: `${PRODUCT} (monthly)`,
+      webhookUrl: `${BASE_URL}/webhook`,
+    });
+    subId = sub.id;
+  } catch (err) {
+    // Both /key and the webhook can race here, or a previous run may have
+    // created the subscription but failed to record it (e.g. Redis outage).
+    // Mollie rejects the duplicate; recover the existing subscription's id.
+    if (String(err.message).includes("already exists")) {
+      const list = await mollie("GET", `/customers/${custId}/subscriptions`);
+      const subs = (list._embedded && list._embedded.subscriptions) || [];
+      const match = subs.find((s) => s.status === "active" || s.status === "pending");
+      if (match) subId = match.id;
+    }
+    if (!subId) throw err;
+  }
 
   await redis(["HSET", "sub:" + key,
     "customerId", custId,
-    "subscriptionId", sub.id,
+    "subscriptionId", subId,
     "paidUntil", Date.now() + SUB_GRACE_MS,
   ]);
   await redis(["SET", "cust:" + custId, key]); // recurring payments -> key
@@ -364,6 +379,26 @@ app.get("/api/verify", async (req, res) => {
 // Called by the app's "Reset License Key" button: frees this device's slot so
 // the key can be activated on another machine. The key stays in the permanent
 // keys:used registry - releasing never makes a key look unused.
+// Called by the app's "Unbind All Devices" button: possession of a valid key
+// authorizes wiping that key's own device slots (same trust model as
+// activating it). The app re-verifies right after, re-registering this PC.
+app.get("/api/unbindall", async (req, res) => {
+  const key = req.query.key;
+  if (!signatureValid(key)) {
+    return res.json({ cleared: false, reason: "invalid" });
+  }
+  if (!bindingEnabled) {
+    return res.json({ cleared: true });
+  }
+  try {
+    await redis(["DEL", "lic:" + key]);
+    res.json({ cleared: true });
+  } catch (err) {
+    console.error(err);
+    res.json({ cleared: false, reason: "error" });
+  }
+});
+
 app.get("/api/release", async (req, res) => {
   const key = req.query.key;
   if (!signatureValid(key)) {

@@ -4,13 +4,12 @@ ANTIGRAVITY VOICE ENGINE & SOUNDBOARD - USER GUIDE
 
 INSTALLING
 ----------
-1. Double-click "Install.bat". It installs the app to your user folder
-   (no admin needed) and creates Desktop / Start Menu shortcuts.
-   (If you prefer PowerShell: right-click Install.ps1 -> Run with
-   PowerShell. The .bat wrapper exists because Windows execution policy
-   often blocks .ps1 files silently.)
+1. Run "AntigravityVoiceEngine-Setup.exe" and follow the wizard. It
+   installs per-user (no admin needed) and creates Desktop / Start
+   Menu shortcuts. If Windows SmartScreen warns about an unknown
+   publisher, click "More info" -> "Run anyway".
 2. To uninstall later: "Antigravity Voice Engine" in Windows
-   Settings > Apps, or run Uninstall.bat.
+   Settings > Apps.
 
 OUTPUT SETUP - HOW TO BE HEARD IN DISCORD / GAMES
 -------------------------------------------------

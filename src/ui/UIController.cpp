@@ -9,6 +9,10 @@
 #include <commdlg.h>
 #endif
 
+#ifndef APP_VERSION
+#define APP_VERSION "dev"
+#endif
+
 UIController::UIController(
     std::shared_ptr<AudioEngine> audioEngine,
     std::shared_ptr<DSPGraph> dspGraph,
@@ -110,7 +114,7 @@ void UIController::render() {
 
     // Header Title
     ImGui::TextColored(ImVec4(0.22f, 0.74f, 0.97f, 1.0f), "ANTIGRAVITY VOICE ENGINE");
-    ImGui::TextDisabled("Desktop-Only Ultra-Low-Latency Voice Changer & Soundboard");
+    ImGui::TextDisabled("Desktop-Only Ultra-Low-Latency Voice Changer & Soundboard   -   v" APP_VERSION);
 
     // Update banner (populated by the background version check)
     if (m_license && m_license->isUpdateAvailable()) {
@@ -219,6 +223,12 @@ void UIController::drawActivationScreen() {
         case LicenseManager::Status::DeviceLimit:
             ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
                                "This key is already active on the maximum number of devices.");
+            ImGui::SetCursorPosX(startX);
+            if (ImGui::Button("Unbind All Devices & Retry", ImVec2(colWidth, 30))) {
+                m_license->unbindAllDevices();
+            }
+            ImGui::SetCursorPosX(startX);
+            ImGui::TextDisabled("Frees the key from every old PC, then activates it here.");
             break;
         case LicenseManager::Status::Expired:
             ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.2f, 1.0f),
@@ -391,7 +401,7 @@ void UIController::drawSettingsPanel() {
     ImGui::Spacing();
 
     // License management
-    ImGui::TextDisabled("License");
+    ImGui::TextDisabled("License  (app v" APP_VERSION ")");
 
     std::string plan = m_license->getPlan();
     if (plan == "lifetime") {
@@ -404,6 +414,13 @@ void UIController::drawSettingsPanel() {
     } else {
         ImGui::TextDisabled("Plan: unknown");
     }
+
+    if (ImGui::Button("Unbind All Devices", ImVec2(-1, 0))) {
+        m_license->unbindAllDevices();
+    }
+    ImGui::SetItemTooltip("Frees this key's device slots on ALL PCs at once, then\n"
+                          "re-registers this PC automatically. Use after reinstalling\n"
+                          "Windows or replacing machines when slots are used up.");
 
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.45f, 0.16f, 0.16f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.65f, 0.20f, 0.20f, 1.0f));
@@ -596,7 +613,7 @@ void UIController::drawDSPGraphPanel() {
 void UIController::drawSoundboardPanel() {
     ImGui::BeginChild("SoundboardChild", ImVec2(0, 0), true);
     
-    ImGui::Text("Soundboard Engine");
+    ImGui::Text("Soundboard Engine  v" APP_VERSION);
     ImGui::SameLine(ImGui::GetWindowWidth() - 130);
     if (ImGui::Button("ADD AUDIO FILE")) {
         std::string path = openFileDialog();
