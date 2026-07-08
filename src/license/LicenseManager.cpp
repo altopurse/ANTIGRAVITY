@@ -23,7 +23,9 @@ namespace fs = std::filesystem;
 //  (no "https://", no trailing slash). See server/README.md.
 // ============================================================================
 static const wchar_t* kServerHost = L"antigravity-license.onrender.com";
-static const char*    kBuyUrl     = "https://antigravity-license.onrender.com/buy";
+// Root page, not /buy directly: it shows both plans (lifetime / monthly) so
+// the user actually gets to choose instead of silently defaulting to one.
+static const char*    kBuyUrl     = "https://antigravity-license.onrender.com/";
 
 #ifndef APP_VERSION
 #define APP_VERSION "1.3.0"
