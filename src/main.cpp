@@ -16,6 +16,7 @@
 #include "ui/UIController.h"
 #include "license/LicenseManager.h"
 #include "config/AppConfig.h"
+#include "ads/AdBanner.h"
 
 #include <iostream>
 #include <memory>
@@ -128,12 +129,22 @@ int main(int, char**) {
     licenseManager->init();
     licenseManager->checkForUpdate();
 
+    // Ad banner (activation/locked screen only, server-controlled - see
+    // server.js /api/ad). Background fetch + decode; texture upload happens
+    // once per frame on the main thread via pollMainThread() below.
+    auto adBanner = std::make_shared<AdBanner>();
+    adBanner->start();
+
     // Create UI Controller
-    auto uiController = std::make_unique<UIController>(audioEngine, dspGraph, soundboard, licenseManager, config);
+    auto uiController = std::make_unique<UIController>(audioEngine, dspGraph, soundboard, licenseManager, config, adBanner);
 
     // Main GUI Loop
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
+
+        // Upload any ad image decoded by the background thread (GL calls
+        // must happen on this thread, which owns the OpenGL context).
+        adBanner->pollMainThread();
 
         // Start the Dear ImGui frame
         ImGui_ImplOpenGL3_NewFrame();

@@ -60,6 +60,25 @@ if(NOT EXISTS ${MINIAUDIO_H})
     endif()
 endif()
 
+# 3b. Download stb_image.h directly (decodes the ad banner image at runtime)
+set(STB_DIR ${CMAKE_BINARY_DIR}/stb)
+file(MAKE_DIRECTORY ${STB_DIR})
+set(STB_IMAGE_H ${STB_DIR}/stb_image.h)
+if(NOT EXISTS ${STB_IMAGE_H})
+    message(STATUS "Downloading stb_image.h...")
+    file(DOWNLOAD https://raw.githubusercontent.com/nothings/stb/master/stb_image.h ${STB_IMAGE_H}
+         STATUS STB_DOWNLOAD_STATUS
+         TLS_VERIFY ON)
+    list(GET STB_DOWNLOAD_STATUS 0 STB_DOWNLOAD_CODE)
+    if(NOT STB_DOWNLOAD_CODE EQUAL 0)
+        file(REMOVE ${STB_IMAGE_H})
+        message(FATAL_ERROR "Failed to download stb_image.h (status: ${STB_DOWNLOAD_STATUS}). "
+                             "Check your internet connection/firewall, or manually download it from "
+                             "https://raw.githubusercontent.com/nothings/stb/master/stb_image.h "
+                             "and place it at ${STB_IMAGE_H}")
+    endif()
+endif()
+
 # Find OpenGL
 find_package(OpenGL REQUIRED)
 
@@ -92,6 +111,7 @@ target_include_directories(voice-changer PRIVATE
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
     ${MINIAUDIO_DIR}
+    ${STB_DIR}
 )
 
 # Link Libraries
@@ -101,7 +121,7 @@ target_link_libraries(voice-changer PRIVATE
 )
 
 # App version (sent to the license server for per-key analytics)
-target_compile_definitions(voice-changer PRIVATE APP_VERSION="1.5.0")
+target_compile_definitions(voice-changer PRIVATE APP_VERSION="1.6.0")
 
 # Windows-specific configurations
 if(WIN32)

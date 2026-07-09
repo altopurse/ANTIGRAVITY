@@ -761,6 +761,19 @@ app.get("/api/version", (req, res) => {
   res.json({ version: LATEST_VERSION, url: DOWNLOAD_URL });
 });
 
+// Ad banner shown on the app's activation (locked) screen for unlicensed
+// users. Set AD_IMAGE_URL (a direct https link to a PNG/JPG) and AD_LINK_URL
+// (where a click should go) in Render to enable it - no app update needed to
+// change or swap the ad later, just edit these env vars and redeploy.
+const AD_IMAGE_URL = process.env.AD_IMAGE_URL || "";
+const AD_LINK_URL = process.env.AD_LINK_URL || "";
+app.get("/api/ad", (req, res) => {
+  if (!AD_IMAGE_URL || !AD_LINK_URL) {
+    return res.json({ imageUrl: null, linkUrl: null });
+  }
+  res.json({ imageUrl: AD_IMAGE_URL, linkUrl: AD_LINK_URL });
+});
+
 app.use((err, req, res, next) => {
   console.error(err);
   res

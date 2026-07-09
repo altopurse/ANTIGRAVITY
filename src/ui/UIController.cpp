@@ -19,9 +19,10 @@ UIController::UIController(
     std::shared_ptr<DSPGraph> dspGraph,
     std::shared_ptr<Soundboard> soundboard,
     std::shared_ptr<LicenseManager> license,
-    std::shared_ptr<AppConfig> config
+    std::shared_ptr<AppConfig> config,
+    std::shared_ptr<AdBanner> adBanner
 ) : m_audioEngine(audioEngine), m_dspGraph(dspGraph), m_soundboard(soundboard),
-    m_license(license), m_config(config) {
+    m_license(license), m_config(config), m_adBanner(adBanner) {
     applyDarkModernTheme();
     applyConfigDevices();
 
@@ -252,6 +253,37 @@ void UIController::drawActivationScreen() {
         default:
             ImGui::TextDisabled("Enter your license key to unlock the app.");
             break;
+    }
+
+    // Ad banner (locked/unlicensed screen only - never shown once activated).
+    // Server-controlled: see server.js /api/ad + AD_IMAGE_URL/AD_LINK_URL.
+    // Absent entirely if the server hasn't configured one.
+    if (m_adBanner && m_adBanner->isReady()) {
+        ImGui::Spacing();
+        ImGui::Spacing();
+        ImGui::SetCursorPosX(startX);
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        float bannerW = colWidth;
+        float bannerH = bannerW / m_adBanner->getAspectRatio();
+        // Cap height so a tall/odd-shaped ad image can't dominate the screen.
+        if (bannerH > 140.0f) {
+            bannerH = 140.0f;
+            bannerW = bannerH * m_adBanner->getAspectRatio();
+        }
+        ImGui::SetCursorPosX((viewport->WorkSize.x - bannerW) * 0.5f);
+
+        ImTextureID texId = reinterpret_cast<ImTextureID>(static_cast<intptr_t>(m_adBanner->getTextureId()));
+        if (ImGui::ImageButton("##adbanner", texId, ImVec2(bannerW, bannerH))) {
+#ifdef _WIN32
+            std::string url = m_adBanner->getLinkUrl();
+            if (!url.empty()) {
+                ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            }
+#endif
+        }
+        ImGui::SetItemTooltip("Sponsored");
     }
 
     ImGui::End();

@@ -4,6 +4,7 @@
 #include "soundboard/Soundboard.h"
 #include "license/LicenseManager.h"
 #include "config/AppConfig.h"
+#include "ads/AdBanner.h"
 #include <memory>
 #include <string>
 
@@ -14,7 +15,8 @@ public:
         std::shared_ptr<DSPGraph> dspGraph,
         std::shared_ptr<Soundboard> soundboard,
         std::shared_ptr<LicenseManager> license,
-        std::shared_ptr<AppConfig> config
+        std::shared_ptr<AppConfig> config,
+        std::shared_ptr<AdBanner> adBanner
     );
     ~UIController();
 
@@ -31,6 +33,7 @@ private:
     std::shared_ptr<Soundboard> m_soundboard;
     std::shared_ptr<LicenseManager> m_license;
     std::shared_ptr<AppConfig> m_config;
+    std::shared_ptr<AdBanner> m_adBanner;
 
     // Restore saved device selections (by name) once devices are known
     void applyConfigDevices();
