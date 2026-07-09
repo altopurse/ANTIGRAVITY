@@ -88,6 +88,92 @@ function flattenHash(flat) {
   return obj;
 }
 
+// ---------- first-party analytics (no third parties, all in our Redis) ----------
+//
+// A random "vid" cookie identifies a browser so returning visitors and the
+// path from visit -> download -> purchase can be followed. Everything is
+// fire-and-forget: analytics must never slow down or break a real request.
+// Uniques use HyperLogLog (PFADD/PFCOUNT) so the count stays tiny regardless
+// of traffic; event lists are capped.
+
+function today() {
+  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
+}
+
+function clientIp(req) {
+  return String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "")
+    .split(",")[0].trim();
+}
+
+function clientCountry(req) {
+  return String(req.headers["cf-ipcountry"] || req.headers["x-vercel-ip-country"] || "").slice(0, 8);
+}
+
+function refHost(req) {
+  const r = String(req.headers["referer"] || req.headers["referrer"] || "");
+  if (!r) return "direct";
+  try { return new URL(r).hostname.replace(/^www\./, "").slice(0, 48); }
+  catch { return "other"; }
+}
+
+// Reads the vid cookie, or assigns a new one (also sets it on the response).
+// Returns the visitor id string.
+function visitorId(req, res) {
+  const m = /(?:^|;\s*)vid=([A-Za-z0-9]{16})/.exec(String(req.headers.cookie || ""));
+  if (m) return m[1];
+  const vid = crypto.randomBytes(8).toString("hex");
+  // 2-year first-party cookie; SameSite=Lax so it survives the Mollie round-trip
+  const prev = res.getHeader("Set-Cookie");
+  const cookie = `vid=${vid}; Path=/; Max-Age=${2 * 365 * 24 * 3600}; SameSite=Lax`;
+  res.setHeader("Set-Cookie", prev ? [].concat(prev, cookie) : cookie);
+  return vid;
+}
+
+// Records a page view + updates the visitor's profile. Called on real pages.
+function trackView(req, res, pageName) {
+  if (!bindingEnabled) return "";
+  const vid = visitorId(req, res);
+  const d = today();
+  const country = clientCountry(req);
+  const ref = refHost(req);
+  const now = new Date().toISOString();
+  const ua = String(req.headers["user-agent"] || "").slice(0, 120);
+
+  Promise.all([
+    redis(["INCR", "stats:views:total"]),
+    redis(["INCR", "stats:views:" + d]),
+    redis(["PFADD", "stats:uniq", vid]),
+    redis(["PFADD", "stats:uniq:" + d, vid]),
+    redis(["HINCRBY", "stats:page", pageName, 1]),
+    redis(["HINCRBY", "stats:ref", ref, 1]),
+    country ? redis(["HINCRBY", "stats:country", country, 1]) : Promise.resolve(),
+    // Per-visitor profile
+    redis(["HSET", "visitor:" + vid, "lastSeen", now, "country", country, "ref", ref, "ua", ua]),
+    redis(["HSETNX", "visitor:" + vid, "firstSeen", now]),
+    redis(["HINCRBY", "visitor:" + vid, "views", 1]),
+    redis(["SADD", "visitors", vid]),
+  ]).catch((e) => console.error("trackView failed:", e.message));
+  return vid;
+}
+
+// Records a named event (download, buy_click, purchase, key_activated) plus a
+// capped recent-events feed. meta is a short object stored with the event.
+function trackEvent(req, res, name, meta = {}) {
+  if (!bindingEnabled) return "";
+  const vid = visitorId(req, res);
+  const entry = JSON.stringify({
+    at: new Date().toISOString(), vid, event: name,
+    country: clientCountry(req), ref: refHost(req), ...meta,
+  });
+  Promise.all([
+    redis(["INCR", "stats:event:" + name]),
+    redis(["HINCRBY", "visitor:" + vid, "ev_" + name, 1]),
+    redis(["LPUSH", "analytics:events", entry]),
+    redis(["LTRIM", "analytics:events", "0", "299"]),
+  ]).catch((e) => console.error("trackEvent failed:", e.message));
+  return vid;
+}
+
 // ---------- license key helpers ----------
 
 function sign(paymentId) {
@@ -167,6 +253,7 @@ function page(title, bodyHtml, opts = {}) {
 // ---------- routes ----------
 
 app.get("/", (req, res) => {
+  trackView(req, res, "home");
   const monthlyBtn = bindingEnabled
     ? `<div class="card">
          <div>Monthly</div>
@@ -235,12 +322,14 @@ app.get("/download", (req, res) => {
     return res.status(404).send(page("Not available",
       `<h1>Download not available yet</h1><p class="muted">Check back soon.</p>`));
   }
+  trackEvent(req, res, "download");
   res.download(file, "AntigravityVoiceEngine-Setup.exe");
 });
 
 app.get("/buy", async (req, res, next) => {
   try {
     const plan = req.query.plan === "monthly" ? "monthly" : "life";
+    trackEvent(req, res, "buy_click", { plan });
 
     if (plan === "monthly" && !bindingEnabled) {
       return res.status(503).send(page("Unavailable",
@@ -248,11 +337,15 @@ app.get("/buy", async (req, res, next) => {
          (Upstash) configured. <a class="btn" href="/buy?plan=life">Buy lifetime instead</a></p>`));
     }
 
+    // Carry the visitor id through Mollie so the completed purchase can be
+    // tied back to the browsing session on /key (visit -> purchase link).
+    const vid = visitorId(req, res);
     let paymentBody = {
       amount: PLANS[plan].amount,
       description: `${PRODUCT} (${PLANS[plan].label.toLowerCase()})`,
       redirectUrl: `${BASE_URL}/key`,
       webhookUrl: `${BASE_URL}/webhook`,
+      metadata: { vid, plan },
     };
 
     if (plan === "monthly") {
@@ -339,6 +432,27 @@ app.get("/key", async (req, res, next) => {
           console.error("subscription activation failed:", err.message);
         }
       }
+      // Analytics: record the purchase and link it to the browsing session.
+      // Guarded against double-counting if the buyer refreshes /key.
+      if (bindingEnabled) {
+        const key = makeKey(pid);
+        const vid = (payment.metadata && payment.metadata.vid) || "";
+        const plan = (payment.metadata && payment.metadata.plan) || "life";
+        redis(["SADD", "stats:purchased", pid]).then(async (added) => {
+          if (added === 1) {
+            await Promise.all([
+              redis(["INCR", "stats:event:purchase"]),
+              redis(["INCRBYFLOAT", "stats:revenue", PLANS[plan] ? PLANS[plan].amount.value : "0"]),
+            ]);
+            if (vid) {
+              await Promise.all([
+                redis(["HSET", "visitor:" + vid, "key", key, "plan", plan, "purchasedAt", new Date().toISOString()]),
+                redis(["HSET", "keyvisitor:" + key, "vid", vid]), // key -> visitor
+              ]);
+            }
+          }
+        }).catch((e) => console.error("purchase track failed:", e.message));
+      }
       return res.send(
         page(
           "Your license key",
@@ -408,6 +522,20 @@ function recordProfile(req, key, device) {
     redis(["HSETNX", "profile:" + key, "firstSeen", now]),
     redis(["HINCRBY", "profile:" + key, "checks", 1]),
   ]).catch((err) => console.error("profile write failed:", err.message));
+
+  // "When do they first use a key" - count each key's first-ever activation
+  // once, and mark the linked visitor (if we know them) as converted.
+  redis(["SADD", "stats:activated", key]).then(async (added) => {
+    if (added !== 1) return;
+    await redis(["INCR", "stats:event:key_activated"]);
+    const vid = await redis(["HGET", "keyvisitor:" + key, "vid"]);
+    if (vid) {
+      await redis(["HSET", "visitor:" + vid, "activatedAt", now, "activatedOs", String(req.query.os || "").slice(0, 64)]);
+    }
+    const entry = JSON.stringify({ at: now, event: "key_activated", key, os: String(req.query.os || "").slice(0, 64) });
+    await redis(["LPUSH", "analytics:events", entry]);
+    await redis(["LTRIM", "analytics:events", "0", "299"]);
+  }).catch((err) => console.error("activation track failed:", err.message));
 }
 
 // Called by the desktop app. Query: key (required), device (fingerprint),
@@ -724,6 +852,121 @@ app.get("/admin", async (req, res) => {
         </tr>
         ${rows || `<tr><td colspan="11" class="muted">No keys yet.</td></tr>`}
       </table></div>
+
+      <h2>Website analytics</h2>
+      ${await (async () => {
+        try {
+          const days = [];
+          for (let i = 13; i >= 0; i--) {
+            const d = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
+            days.push(d);
+          }
+          const [
+            totalViews, uniqTotal, homeViews,
+            evDownload, evBuy, evPurchase, evActivated, revenue,
+            refFlat, countryFlat,
+          ] = await Promise.all([
+            redis(["GET", "stats:views:total"]),
+            redis(["PFCOUNT", "stats:uniq"]),
+            redis(["HGET", "stats:page", "home"]),
+            redis(["GET", "stats:event:download"]),
+            redis(["GET", "stats:event:buy_click"]),
+            redis(["GET", "stats:event:purchase"]),
+            redis(["GET", "stats:event:key_activated"]),
+            redis(["GET", "stats:revenue"]),
+            redis(["HGETALL", "stats:ref"]),
+            redis(["HGETALL", "stats:country"]),
+          ]);
+          const perDay = await Promise.all(days.map((d) => redis(["GET", "stats:views:" + d])));
+          const uniqPerDay = await Promise.all(days.map((d) => redis(["PFCOUNT", "stats:uniq:" + d])));
+
+          const n = (x) => Number(x || 0);
+          const views = n(totalViews), uniq = n(uniqTotal);
+          const downloads = n(evDownload), buys = n(evBuy), purchases = n(evPurchase), activations = n(evActivated);
+          const rev = parseFloat(revenue || "0").toFixed(2);
+          const conv = uniq > 0 ? ((purchases / uniq) * 100).toFixed(1) : "0.0";
+
+          // Mini bar chart of the last 14 days of views
+          const maxDay = Math.max(1, ...perDay.map(n));
+          const bars = days.map((d, i) => {
+            const h = Math.round((n(perDay[i]) / maxDay) * 46) + 2;
+            return `<div title="${d}: ${n(perDay[i])} views, ${n(uniqPerDay[i])} unique"
+              style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:4px">
+              <div style="width:70%;height:${h}px;background:#2a70a6;border-radius:3px 3px 0 0"></div>
+              <span style="font-size:0.6rem;color:#5a5a68">${d.slice(5)}</span></div>`;
+          }).join("");
+
+          const toSorted = (flat) => {
+            const o = flattenHash(flat); const arr = Object.entries(o).map(([k, v]) => [k, Number(v)]);
+            arr.sort((a, b) => b[1] - a[1]); return arr;
+          };
+          const refRows = toSorted(refFlat).slice(0, 8).map(([k, v]) =>
+            `<tr><td>${esc(k)}</td><td>${v}</td></tr>`).join("") || `<tr><td class="muted" colspan="2">No data yet</td></tr>`;
+          const countryRows = toSorted(countryFlat).slice(0, 8).map(([k, v]) =>
+            `<tr><td>${esc(k)}</td><td>${v}</td></tr>`).join("") || `<tr><td class="muted" colspan="2">No data yet</td></tr>`;
+
+          const card = (label, value, sub) =>
+            `<div class="card" style="padding:16px"><div class="muted" style="font-size:0.8rem">${label}</div>
+             <div style="font-size:1.6rem;font-weight:700;color:#f2f2f7">${value}</div>
+             ${sub ? `<div class="muted" style="font-size:0.75rem">${sub}</div>` : ""}</div>`;
+
+          return `
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;margin-bottom:20px">
+              ${card("Page views", views)}
+              ${card("Unique visitors", uniq)}
+              ${card("Downloads", downloads)}
+              ${card("Purchases", purchases, "£" + rev + " revenue")}
+              ${card("Keys activated", activations)}
+              ${card("Conversion", conv + "%", "visitors -> purchase")}
+            </div>
+
+            <div class="card" style="margin-bottom:20px">
+              <div class="muted" style="font-size:0.8rem;margin-bottom:10px">Views per day (last 14 days)</div>
+              <div style="display:flex;align-items:flex-end;gap:3px;height:70px">${bars}</div>
+            </div>
+
+            <div class="card" style="margin-bottom:20px">
+              <div class="muted" style="font-size:0.85rem;margin-bottom:8px">Funnel</div>
+              <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:0.9rem">
+                <span>${homeViews ? n(homeViews) : views} visits</span> <span class="muted">-&gt;</span>
+                <span>${downloads} downloads</span> <span class="muted">-&gt;</span>
+                <span>${buys} buy clicks</span> <span class="muted">-&gt;</span>
+                <span style="color:#5fd18a">${purchases} purchases</span> <span class="muted">-&gt;</span>
+                <span style="color:#38b0f8">${activations} activated</span>
+              </div>
+            </div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:8px">
+              <div><div class="muted" style="font-size:0.85rem;margin-bottom:6px">Top referrers</div>
+                <table style="width:100%;border-collapse:collapse;font-size:0.8rem">
+                <tr style="color:#9a9aa5;text-align:left"><th>Source</th><th>Views</th></tr>${refRows}</table></div>
+              <div><div class="muted" style="font-size:0.85rem;margin-bottom:6px">Top countries</div>
+                <table style="width:100%;border-collapse:collapse;font-size:0.8rem">
+                <tr style="color:#9a9aa5;text-align:left"><th>Country</th><th>Views</th></tr>${countryRows}</table></div>
+            </div>`;
+        } catch (e) {
+          console.error("analytics render failed:", e.message);
+          return `<p class="muted">Analytics unavailable.</p>`;
+        }
+      })()}
+
+      <h2>Recent activity</h2>
+      ${await (async () => {
+        try {
+          const raw = (await redis(["LRANGE", "analytics:events", "0", "24"])) || [];
+          if (!raw.length) return `<p class="muted">No events yet.</p>`;
+          const rows = raw.map((r) => {
+            let e = {}; try { e = JSON.parse(r); } catch {}
+            const detail = e.plan ? e.plan : (e.key ? esc(String(e.key).slice(0, 22)) + "..." : "");
+            return `<tr><td>${esc((e.at || "").replace("T", " ").slice(0, 16))}</td>
+              <td>${esc(e.event || "")}</td><td>${esc(detail)}</td>
+              <td>${esc(e.ref || "")}</td><td>${esc(e.country || e.os || "")}</td></tr>`;
+          }).join("");
+          return `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.8rem">
+            <tr style="text-align:left;color:#9a9aa5"><th>When (UTC)</th><th>Event</th><th>Detail</th><th>Source</th><th>Where</th></tr>
+            ${rows}</table></div>`;
+        } catch { return `<p class="muted">Activity feed unavailable.</p>`; }
+      })()}
 
       <h2>Recent crashes</h2>
       ${await (async () => {
