@@ -3,6 +3,7 @@
 #include "imgui.h"
 #include <iostream>
 #include <algorithm>
+#include <cstring>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -23,6 +24,15 @@ UIController::UIController(
     m_license(license), m_config(config) {
     applyDarkModernTheme();
     applyConfigDevices();
+
+    // Pre-fill the activation field with whatever key last worked on this
+    // PC (survives Reset License Key) so the user isn't stuck retyping it.
+    std::string lastKey = LicenseManager::getLastKey();
+    if (!lastKey.empty()) {
+        size_t n = std::min(lastKey.size(), sizeof(m_licenseKeyInput) - 1);
+        std::memcpy(m_licenseKeyInput, lastKey.data(), n);
+        m_licenseKeyInput[n] = '\0';
+    }
 }
 
 UIController::~UIController() {}

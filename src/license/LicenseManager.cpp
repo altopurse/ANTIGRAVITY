@@ -140,6 +140,7 @@ void LicenseManager::verifyAsync(std::string key, bool saveOnSuccess) {
         int result = verifyOnline(key);
         if (result == 1) {
             if (saveOnSuccess) saveKey(key);
+            saveLastKey(key); // refresh the recall cache on every good verify
             {
                 std::lock_guard<std::mutex> lock(m_keyMutex);
                 m_activeKey = key;
@@ -229,6 +230,33 @@ void LicenseManager::saveKey(const std::string& key) {
 void LicenseManager::deleteSavedKey() {
     std::error_code ec;
     fs::remove(licenseFilePath(), ec);
+}
+
+// Separate file from license.key: reset() and an invalid/expired key both
+// clear license.key (to lock the app), but this one is left alone so the
+// activation screen can still pre-fill whatever key last worked here.
+std::string LicenseManager::lastKeyFilePath() {
+    const char* base = std::getenv("LOCALAPPDATA");
+    fs::path dir = base ? fs::path(base) / "AntigravityVoiceEngine" : fs::path(".");
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    return (dir / "last_key.txt").string();
+}
+
+void LicenseManager::saveLastKey(const std::string& key) {
+    std::ofstream f(lastKeyFilePath(), std::ios::trunc);
+    f << key << "\n";
+}
+
+std::string LicenseManager::getLastKey() {
+    std::ifstream f(lastKeyFilePath());
+    if (!f) return "";
+    std::string key;
+    std::getline(f, key);
+    key.erase(std::remove_if(key.begin(), key.end(),
+                             [](unsigned char c) { return std::isspace(c); }),
+              key.end());
+    return key;
 }
 
 // Pulls "field":"value" out of a flat JSON body (no JSON library needed)

@@ -79,6 +79,15 @@ async function redis(cmd) {
   return data.result;
 }
 
+// Upstash returns HGETALL as a flat [field, value, field, value, ...] array
+// (or null for a missing key). Turns it into a plain object.
+function flattenHash(flat) {
+  const obj = {};
+  if (!flat) return obj;
+  for (let i = 0; i + 1 < flat.length; i += 2) obj[flat[i]] = flat[i + 1];
+  return obj;
+}
+
 // ---------- license key helpers ----------
 
 function sign(paymentId) {
@@ -293,6 +302,7 @@ async function activateSubscription(payment) {
   }
 
   await redis(["HSET", "sub:" + key,
+    "plan", "monthly",
     "customerId", custId,
     "subscriptionId", subId,
     "paidUntil", Date.now() + SUB_GRACE_MS,
@@ -408,15 +418,18 @@ app.get("/api/verify", async (req, res) => {
   }
 
   try {
-    // Monthly keys: reject once the paid-until window has lapsed.
-    const paidUntil = await redis(["HGET", "sub:" + key, "paidUntil"]);
-    if (paidUntil !== null && Date.now() > Number(paidUntil)) {
+    // Time-boxed keys (monthly subscription or an admin-issued trial): reject
+    // once the paid-until window has lapsed.
+    const sub = flattenHash(await redis(["HGETALL", "sub:" + key]));
+    const paidUntil = sub.paidUntil !== undefined ? Number(sub.paidUntil) : null;
+    if (paidUntil !== null && Date.now() > paidUntil) {
       return res.json({ valid: false, reason: "expired" });
     }
     // Tell the app which plan this is so it can show it next to Reset.
+    const plan = sub.plan || (paidUntil === null ? "lifetime" : "monthly");
     const planFields = paidUntil === null
-      ? { plan: "lifetime" }
-      : { plan: "monthly", paidUntil: new Date(Number(paidUntil)).toISOString() };
+      ? { plan }
+      : { plan, paidUntil: new Date(paidUntil).toISOString() };
 
     const setKey = "lic:" + key;
     // Already activated on this device? Always allow.
@@ -536,28 +549,44 @@ async function collectKeyData() {
   const keys = (await redis(["SMEMBERS", "keys:used"])) || [];
   const out = [];
   for (const k of keys.slice(0, 500)) {
-    const profile = (await redis(["HGETALL", "profile:" + k])) || [];
-    // Upstash returns HGETALL as a flat [field, value, ...] array
-    const p = {};
-    for (let i = 0; i + 1 < profile.length; i += 2) p[profile[i]] = profile[i + 1];
+    const p = flattenHash(await redis(["HGETALL", "profile:" + k]));
 
-    // Plan/status from the subscription record (absent = lifetime)
-    const paidUntil = await redis(["HGET", "sub:" + k, "paidUntil"]);
-    const plan = paidUntil === null ? "lifetime" : "monthly";
+    // Plan/status from the subscription record (absent sub hash = lifetime)
+    const sub = flattenHash(await redis(["HGETALL", "sub:" + k]));
+    const paidUntil = sub.paidUntil !== undefined ? Number(sub.paidUntil) : null;
+    const plan = sub.plan || (paidUntil === null ? "lifetime" : "monthly");
     const status =
-      plan === "lifetime" ? "active"
-      : Date.now() > Number(paidUntil) ? "expired" : "active";
+      paidUntil === null ? "active"
+      : Date.now() > paidUntil ? "expired" : "active";
 
     out.push({
       key: k,
       plan,
       status,
-      paidUntil: paidUntil === null ? "" : new Date(Number(paidUntil)).toISOString(),
+      paidUntil: paidUntil === null ? "" : new Date(paidUntil).toISOString(),
       activeDevices: await redis(["SCARD", "lic:" + k]),
       ...p,
     });
   }
   return { count: keys.length, keys: out };
+}
+
+// Issues a new key without a Mollie payment (giveaways, trials, support
+// comps). days=0 -> lifetime; days>0 -> expires after that many days and is
+// tagged plan "trial" so the dashboard/app can tell it apart from a paid sub.
+async function generateKey({ days, note }) {
+  const id = "admin_" + crypto.randomBytes(9).toString("hex");
+  const key = makeKey(id);
+  const now = new Date().toISOString();
+
+  if (days > 0) {
+    await redis(["HSET", "sub:" + key, "plan", "trial", "paidUntil", Date.now() + days * 86400000]);
+  }
+  // Recorded immediately (not just on first activation) so it shows up on
+  // the dashboard right away, even before anyone has used it.
+  await redis(["SADD", "keys:used", key]);
+  await redis(["HSET", "profile:" + key, "source", "admin", "note", note, "firstSeen", now]);
+  return key;
 }
 
 // JSON view of every key ever activated + its usage profile.
@@ -590,6 +619,24 @@ app.get("/api/admin/clear", async (req, res) => {
   }
 });
 
+// Issues a giveaway/trial key (owner only) and sends the admin back to the
+// dashboard with it highlighted so it can be copied immediately.
+app.get("/admin/generate", async (req, res) => {
+  if (!adminAuthorized(req)) return res.redirect("/login");
+  if (!bindingEnabled) return res.redirect("/admin");
+  const days = Math.max(0, Math.min(3650, parseInt(req.query.days || "0", 10) || 0));
+  const note = String(req.query.note || "").slice(0, 80);
+  try {
+    const key = await generateKey({ days, note });
+    res.redirect("/admin?newkey=" + encodeURIComponent(key));
+  } catch (err) {
+    console.error(err);
+    res.redirect("/admin");
+  }
+});
+
+const PLAN_COLORS = { lifetime: "#f2f2f7", monthly: "#38b0f8", trial: "#c99cf1" };
+
 // Human-friendly dashboard: plans, status, devices, last login, OS, version.
 app.get("/admin", async (req, res) => {
   if (!adminAuthorized(req)) {
@@ -603,13 +650,24 @@ app.get("/admin", async (req, res) => {
     const data = await collectKeyData();
     const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    const paid = data.keys.filter((k) => k.source !== "admin");
     const monthly = data.keys.filter((k) => k.plan === "monthly");
+    const trials = data.keys.filter((k) => k.plan === "trial");
     const activeSubs = monthly.filter((k) => k.status === "active").length;
+
+    const newKey = String(req.query.newkey || "");
+    const newKeyBanner = newKey
+      ? `<div class="card" style="border-color:#38b0f8;margin-bottom:20px">
+           <div class="muted" style="margin-bottom:8px">New key generated - copy it now:</div>
+           <code class="key">${esc(newKey)}</code>
+         </div>`
+      : "";
+
     const rows = data.keys
       .sort((a, b) => String(b.lastSeen || "").localeCompare(String(a.lastSeen || "")))
       .map((k) => `<tr>
         <td><code>${esc(k.key)}</code></td>
-        <td>${esc(k.plan)}</td>
+        <td style="color:${PLAN_COLORS[k.plan] || "#f2f2f7"}">${esc(k.plan)}</td>
         <td style="color:${k.status === "active" ? "#5fd18a" : "#f47272"}">${esc(k.status)}${
           k.paidUntil ? `<br><span class="muted" style="font-size:0.75rem">until ${esc(k.paidUntil.slice(0, 10))}</span>` : ""}</td>
         <td>${esc(k.activeDevices)}/${DEVICE_LIMIT}</td>
@@ -617,6 +675,7 @@ app.get("/admin", async (req, res) => {
         <td>${esc(k.os || "")}</td>
         <td>${esc(k.appVersion || "")}</td>
         <td>${esc(k.country || "")}</td>
+        <td>${k.source === "admin" ? `Given away${k.note ? ` <span class="muted">(${esc(k.note)})</span>` : ""}` : "Purchased"}</td>
         <td>${esc(k.checks || 0)}</td>
         <td><a href="/api/admin/clear?key=${encodeURIComponent(k.key)}&back=1"
                onclick="return confirm('Free all device slots for this key?')">clear devices</a></td>
@@ -624,19 +683,38 @@ app.get("/admin", async (req, res) => {
     res.send(page("License dashboard", `
       <h1>License dashboard</h1>
       <p class="muted">
-        <strong style="color:#f2f2f7">${data.count}</strong> key(s) sold ·
-        <strong style="color:#f2f2f7">${data.count - monthly.length}</strong> lifetime ·
+        <strong style="color:#f2f2f7">${data.count}</strong> key(s) total ·
+        <strong style="color:#f2f2f7">${paid.length}</strong> purchased ·
         <strong style="color:#f2f2f7">${activeSubs}</strong> active subscription(s) ·
-        "Clear devices" frees all slots so the customer can re-activate anywhere.
+        <strong style="color:#f2f2f7">${trials.length}</strong> trial/giveaway key(s)
       </p>
+
+      ${newKeyBanner}
+
+      <div class="card" style="margin-bottom:24px;text-align:left">
+        <h2 style="margin-top:0">Give away a key</h2>
+        <form method="GET" action="/admin/generate" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+          <select name="days" style="padding:10px;border-radius:6px;background:#1c1c26;color:#fff;border:1px solid #2e2e3e">
+            <option value="0">Lifetime</option>
+            <option value="1">1 day</option>
+            <option value="7" selected>1 week</option>
+            <option value="30">1 month</option>
+          </select>
+          <input type="text" name="note" placeholder="Note (optional, e.g. a streamer's name)"
+            style="padding:10px;border-radius:6px;background:#1c1c26;color:#fff;border:1px solid #2e2e3e;flex:1;min-width:180px">
+          <button type="submit">Generate key</button>
+        </form>
+      </div>
+
       <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.85rem">
         <tr style="text-align:left;color:#9a9aa5">
           <th>Key</th><th>Plan</th><th>Status</th><th>Devices</th><th>Last login (UTC)</th>
-          <th>OS</th><th>App</th><th>Country</th><th>Checks</th><th></th>
+          <th>OS</th><th>App</th><th>Country</th><th>Source</th><th>Checks</th><th></th>
         </tr>
-        ${rows || `<tr><td colspan="10" class="muted">No keys activated yet.</td></tr>`}
+        ${rows || `<tr><td colspan="11" class="muted">No keys yet.</td></tr>`}
       </table></div>
-      <style>td,th{padding:8px 10px;border-bottom:1px solid #2e2e3e} td a{color:#f47272} .muted{color:#9a9aa5}</style>`));
+      <style>td,th{padding:8px 10px;border-bottom:1px solid #2e2e3e} td a{color:#f47272} .muted{color:#9a9aa5}</style>`,
+      { wide: true }));
   } catch (err) {
     console.error(err);
     res.status(500).send(page("Error", `<h1>Redis error</h1>`));

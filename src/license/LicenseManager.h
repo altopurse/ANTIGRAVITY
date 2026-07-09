@@ -31,8 +31,15 @@ public:
     void activate(const std::string& key);
 
     // "Reset License Key": clears the saved key and frees this device's slot
-    // on the server, then locks the app so a key must be entered again.
+    // on the server, then locks the app so a key must be entered again. The
+    // key itself is kept in a separate recall file (see getLastKey()) so the
+    // activation screen can pre-fill it - resetting doesn't mean retyping it.
     void reset();
+
+    // Last key that was successfully activated on this PC, kept even after
+    // Reset so the activation screen can pre-fill it instead of the user
+    // having to dig it up again. Empty if nothing has ever activated here.
+    static std::string getLastKey();
 
     // "Unbind All Devices": frees every device slot for the current key on
     // the server (all PCs), then re-verifies so this PC re-registers. Use
@@ -72,6 +79,9 @@ private:
     static std::string loadSavedKey();
     static void saveKey(const std::string& key);
     static void deleteSavedKey();
+    // Separate recall cache, deliberately NOT cleared by reset()/deleteSavedKey()
+    static std::string lastKeyFilePath();
+    static void saveLastKey(const std::string& key);
 
     // Returns 1 = valid, 0 = invalid, 2 = device limit, 3 = expired, -1 = network error.
     // Not static: fills m_plan/m_paidUntil from the response on success.
