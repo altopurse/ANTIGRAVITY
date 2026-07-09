@@ -2,7 +2,7 @@
 ; Compiled by package.ps1 (paths below are relative to this file).
 
 #define AppName "Antigravity Voice Engine"
-#define AppVersion "1.3.0"
+#define AppVersion "1.4.0"
 #define AppExe "voice-changer.exe"
 
 [Setup]
@@ -40,8 +40,9 @@ Name: "{userdesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName} now"; Flags: nowait postinstall skipifsilent
 ; VB-Audio does not permit redistributing VB-CABLE, so offer their official
-; download page instead of bundling the driver.
-Filename: "https://vb-audio.com/Cable/"; Description: "Get VB-CABLE (virtual mic driver - needed for Discord/games)"; Flags: shellexec nowait postinstall skipifsilent unchecked
+; download page instead of bundling the driver. Checked by default since it's
+; required for the app's output to reach Discord/games - user can untick it.
+Filename: "https://vb-audio.com/Cable/"; Description: "Get VB-CABLE (virtual mic driver - REQUIRED for Discord/games)"; Flags: shellexec nowait postinstall skipifsilent
 
 [UninstallDelete]
 ; imgui.ini is created at runtime next to the exe
