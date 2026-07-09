@@ -328,6 +328,14 @@ app.get("/", async (req, res) => {
          <span class="chip">✓ Auto-updates</span>
        </div>
 
+       <h2>See it in action</h2>
+       <video controls preload="none" poster="/demo-poster.jpg" playsinline
+              style="width:100%;border-radius:12px;border:1px solid #2e2e3e;display:block;background:#000">
+         <source src="/demo.mp4" type="video/mp4">
+         Your browser can't play this video - <a href="/demo.mp4">download it</a> instead.
+       </video>
+       <p class="muted" style="text-align:center;margin-top:8px">Live in-game voice chat, changed in real time.</p>
+
        <h2>What you get</h2>
        <ul class="features">
          <li>8 real-time voice effects (pitch, EQ, compressor, reverb, robot &amp; more)</li>
