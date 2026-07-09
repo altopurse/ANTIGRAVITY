@@ -209,6 +209,13 @@ app.get("/", (req, res) => {
        paste it into the app's activation screen. Keep it safe, you'll need it if you reinstall.
        Monthly keys stop working if the subscription ends.</p>
 
+       <div style="margin:32px 0;text-align:center">
+         <div id="frame" style="width:100%;margin:auto;position:relative;z-index:99998">
+           <iframe data-aa='2447478' src='//acceptable.a-ads.com/2447478/?size=Adaptive'
+             style='border:0;padding:0;width:70%;height:auto;overflow:hidden;display:block;margin:auto'></iframe>
+         </div>
+       </div>
+
        <footer>Antigravity Voice Engine</footer>`,
       { wide: true }
     )
