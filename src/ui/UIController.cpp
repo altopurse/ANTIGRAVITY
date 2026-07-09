@@ -343,6 +343,21 @@ void UIController::drawActivationScreen() {
         ImGui::SetItemTooltip("Sponsored");
     }
 
+    // Small, honest disclosure at the consent moment (activating starts the
+    // app's licence checks / anonymous device telemetry).
+    ImGui::Spacing();
+    ImGui::SetCursorPosX(startX);
+    ImGui::TextDisabled("By activating you agree to our");
+    ImGui::SameLine(0.0f, 4.0f);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.28f, 0.69f, 0.98f, 1.0f));
+    if (ImGui::SmallButton("Terms & Privacy")) {
+#ifdef _WIN32
+        ShellExecuteA(nullptr, "open", "https://antigravity-license.onrender.com/legal",
+                      nullptr, nullptr, SW_SHOWNORMAL);
+#endif
+    }
+    ImGui::PopStyleColor();
+
     ImGui::End();
 }
 

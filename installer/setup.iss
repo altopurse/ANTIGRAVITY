@@ -2,7 +2,7 @@
 ; Compiled by package.ps1 (paths below are relative to this file).
 
 #define AppName "Antigravity Voice Engine"
-#define AppVersion "1.7.0"
+#define AppVersion "1.8.0"
 #define AppExe "voice-changer.exe"
 
 [Setup]
@@ -43,9 +43,16 @@ Name: "{userdesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName} now"; Flags: nowait postinstall skipifsilent
 
+[UninstallRun]
+; Best-effort ping so the dashboard knows this machine removed the app. Reads
+; the anonymous device id the app wrote, fires one short HTTP request, never
+; blocks or fails the uninstall (errors swallowed).
+Filename: "powershell.exe"; Parameters: "-NoProfile -WindowStyle Hidden -Command ""try {{ $d = (Get-Content -Raw '{app}\device.id').Trim(); Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 -Uri ('https://antigravity-license.onrender.com/api/uninstall?device=' + $d) | Out-Null }} catch {{}}"""; Flags: runhidden; RunOnceId: "uninstallping"
+
 [UninstallDelete]
-; imgui.ini is created at runtime next to the exe
+; imgui.ini and device.id are created at runtime next to the exe
 Type: files; Name: "{app}\imgui.ini"
+Type: files; Name: "{app}\device.id"
 
 [Code]
 // VB-Audio doesn't permit redistributing VB-CABLE inside other installers,

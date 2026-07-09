@@ -376,10 +376,66 @@ app.get("/", async (req, res) => {
        (installed automatically). In Discord/your game, just pick <strong>"CABLE Output"</strong> as your
        microphone - everyone now hears your new voice. The guided setup walks you through it on first launch.</p>
 
-       <footer>Antigravity Voice Engine · <a href="/download" style="color:#5a5a68">Download</a></footer>`,
+       <div style="margin:36px 0 8px">
+       <!-- BEGIN AADS AD UNIT 2447478 -->
+       <div id="frame" style="width: 100%;margin: auto;position: relative; z-index: 99998;">
+                 <iframe data-aa='2447478' src='//acceptable.a-ads.com/2447478/?size=Adaptive'
+                                   style='border:0; padding:0; width:70%; height:auto; overflow:hidden;display: block;margin: auto'></iframe>
+               </div>
+       <!-- END AADS AD UNIT 2447478 -->
+       </div>
+
+       <footer>Antigravity Voice Engine · <a href="/download" style="color:#5a5a68">Download</a>
+         · <a href="/legal" style="color:#5a5a68">Terms &amp; Privacy</a></footer>`,
       { wide: true }
     )
   );
+});
+
+// Terms of Service + privacy / data notice. Concise and honest: a clear,
+// findable disclosure is what actually keeps you compliant (GDPR/UK GDPR fine
+// people for HIDING data use, not for a short plain-English notice).
+app.get("/legal", (req, res) => {
+  res.send(page("Terms & Privacy - Antigravity Voice Engine", `
+    <h1>Terms &amp; Privacy</h1>
+    <p class="muted">Last updated: ${new Date().toISOString().slice(0, 10)}. Plain-English summary of how
+    Antigravity Voice Engine works and what data it uses. Using the app or site means you accept this.</p>
+
+    <h2>The basics</h2>
+    <ul class="features" style="grid-template-columns:1fr">
+      <li>The app is provided "as is", for lawful use. Don't use it to harass, impersonate, or break
+          the rules of Discord, a game, or any platform.</li>
+      <li>A licence key unlocks the app. One key works on up to ${DEVICE_LIMIT} machines. Don't resell
+          or publicly share keys - shared keys can be revoked.</li>
+      <li>Payments are handled by <a href="https://www.mollie.com" style="color:#38b0f8">Mollie</a>;
+          we never see your card details. Lifetime keys are one-time; monthly keys stop working if the
+          subscription ends.</li>
+    </ul>
+
+    <h2>What data we use, and why</h2>
+    <p class="muted">We don't use Google Analytics, don't run trackers across other sites, and don't sell
+    data. There are no user accounts. What we do collect:</p>
+    <ul class="features" style="grid-template-columns:1fr">
+      <li><strong>Website:</strong> a random visitor id (in a cookie), pages viewed, the site that referred
+          you, and an approximate country (from your IP). Used only to see how many people visit and what
+          works.</li>
+      <li><strong>App:</strong> when it checks your licence, it sends the key, an <em>anonymous</em> one-way
+          fingerprint of the PC (a hashed Windows ID - not reversible, not your name), your Windows and app
+          version, and approximate country. This enforces the ${DEVICE_LIMIT}-device limit, stops key-sharing,
+          and tells us which versions/systems to support.</li>
+      <li><strong>Stability:</strong> if the app crashes, it may send the app version, OS, and an error code -
+          no documents, audio, or personal files, ever. Your microphone audio is processed live on your PC
+          and is <strong>never uploaded</strong>.</li>
+      <li><strong>Install status:</strong> we record that a machine has the app installed (by that anonymous
+          fingerprint) and, if you uninstall, that it was removed.</li>
+    </ul>
+
+    <h2>Your choices</h2>
+    <p class="muted">Uninstalling removes the app and stops all app data collection. Want your records deleted
+    or have a question? Email the address on our store/checkout and we'll sort it. Because the machine
+    fingerprint is anonymised, quote your licence key so we can find your entries.</p>
+
+    <p style="margin-top:28px"><a class="btn" href="/">← Back</a></p>`, { wide: true }));
 });
 
 // Serves the installer built by package.ps1 (server/public/downloads/).
@@ -596,6 +652,19 @@ function recordProfile(req, key, device) {
     redis(["HINCRBY", "profile:" + key, "checks", 1]),
   ]).catch((err) => console.error("profile write failed:", err.message));
 
+  // Per-machine install record: which PCs the app lives on, where, and whether
+  // it's still there. Each verify refreshes lastSeen and clears any prior
+  // "uninstalled" flag (covers a reinstall on the same PC).
+  const os = String(req.query.os || "").slice(0, 64);
+  const ver = String(req.query.v || "").slice(0, 32);
+  Promise.all([
+    redis(["SADD", "installs", device]),
+    redis(["HSET", "install:" + device,
+      "key", key, "os", os, "version", ver,
+      "country", country.slice(0, 8), "lastSeen", now, "uninstalled", "0"]),
+    redis(["HSETNX", "install:" + device, "firstSeen", now]),
+  ]).catch((err) => console.error("install record failed:", err.message));
+
   // "When do they first use a key" - count each key's first-ever activation
   // once, and mark the linked visitor (if we know them) as converted.
   redis(["SADD", "stats:activated", key]).then(async (added) => {
@@ -800,6 +869,32 @@ async function collectPresence(limit = 60) {
   return people;
 }
 
+// Every machine the app has been installed on, newest activity first, with a
+// live status (online / active / idle / uninstalled).
+async function collectInstalls(limit = 200) {
+  const devices = (await redis(["SMEMBERS", "installs"])) || [];
+  const now = Date.now();
+  const out = [];
+  for (const d of devices.slice(0, limit)) {
+    const h = flattenHash(await redis(["HGETALL", "install:" + d]));
+    const last = h.lastSeen ? Date.parse(h.lastSeen) : 0;
+    const ageMs = now - last;
+    let status;
+    if (h.uninstalled === "1") status = "uninstalled";
+    else if (ageMs < 5 * 60 * 1000) status = "online";
+    else if (ageMs < 7 * 24 * 3600 * 1000) status = "active";
+    else status = "idle"; // not seen in 7+ days - possibly removed without a ping
+    out.push({
+      device: d, status,
+      os: h.os || "", version: h.version || "", country: h.country || "",
+      key: h.key || "", firstSeen: h.firstSeen || "", lastSeen: h.lastSeen || "",
+      uninstalledAt: h.uninstalledAt || "", last,
+    });
+  }
+  out.sort((a, b) => b.last - a.last);
+  return out;
+}
+
 async function collectKeyData() {
   const keys = (await redis(["SMEMBERS", "keys:used"])) || [];
   const out = [];
@@ -969,7 +1064,25 @@ app.get("/admin", async (req, res) => {
         ${rows || `<tr><td colspan="11" class="muted">No keys yet.</td></tr>`}
       </table></div>
 
-      <h2>Recently active people</h2>
+      <h2 style="display:flex;align-items:center;gap:12px">Recently active people
+        <a class="btn ghost" href="/admin" style="padding:6px 14px;font-size:0.8rem">↻ Refresh</a>
+        <label class="muted" style="font-size:0.8rem;font-weight:400">
+          <input type="checkbox" id="autoref"> auto (15s)</label>
+      </h2>
+      <script>
+        // Auto-refresh toggle for the live lists; remembers the choice
+        (function(){
+          var cb = document.getElementById('autoref');
+          if (!cb) return;
+          if (localStorage.getItem('adminAuto') === '1') cb.checked = true;
+          var t = null;
+          function apply(){
+            if (cb.checked){ localStorage.setItem('adminAuto','1'); t = setTimeout(function(){ location.reload(); }, 15000); }
+            else { localStorage.removeItem('adminAuto'); if (t) clearTimeout(t); }
+          }
+          cb.addEventListener('change', apply); apply();
+        })();
+      </script>
       ${await (async () => {
         try {
           const people = await collectPresence(60);
@@ -996,6 +1109,44 @@ app.get("/admin", async (req, res) => {
         } catch (e) {
           console.error("presence render failed:", e.message);
           return `<p class="muted">Presence list unavailable.</p>`;
+        }
+      })()}
+
+      <h2>Installations</h2>
+      ${await (async () => {
+        try {
+          const installs = await collectInstalls(200);
+          if (!installs.length) return `<p class="muted">No installs recorded yet.</p>`;
+          const rel = (ms) => {
+            if (!ms) return "never";
+            const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+            return s < 60 ? s + "s ago" : s < 3600 ? Math.round(s / 60) + "m ago"
+              : s < 86400 ? Math.round(s / 3600) + "h ago" : Math.round(s / 86400) + "d ago";
+          };
+          const colors = { online: "#5fd18a", active: "#38b0f8", idle: "#9a9aa5", uninstalled: "#f47272" };
+          const labels = { online: "● online", active: "installed", idle: "idle (7d+)", uninstalled: "uninstalled" };
+          const live = installs.filter((i) => i.status !== "uninstalled").length;
+          const gone = installs.filter((i) => i.status === "uninstalled").length;
+          const rows = installs.map((i) => `<tr>
+            <td style="color:${colors[i.status]}">${labels[i.status]}</td>
+            <td><code>${esc(i.device.slice(0, 12))}</code></td>
+            <td>${esc(i.os)}</td>
+            <td>${esc(i.version ? "v" + i.version : "")}</td>
+            <td>${esc(i.country)}</td>
+            <td class="muted">${esc(i.key ? i.key.slice(0, 16) + "…" : "")}</td>
+            <td class="muted">${i.status === "uninstalled" && i.uninstalledAt
+              ? "removed " + rel(Date.parse(i.uninstalledAt)) : rel(i.last)}</td>
+          </tr>`).join("");
+          return `<p class="muted"><strong style="color:#f2f2f7">${installs.length}</strong> machine(s) ·
+            <strong style="color:#5fd18a">${live}</strong> still installed ·
+            <strong style="color:#f47272">${gone}</strong> uninstalled ·
+            each row is one PC (anonymous machine fingerprint)</p>
+            <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+            <tr style="text-align:left;color:#9a9aa5"><th>Status</th><th>Machine</th><th>OS</th><th>App</th><th>Country</th><th>Key</th><th>Last seen</th></tr>
+            ${rows}</table></div>`;
+        } catch (e) {
+          console.error("installs render failed:", e.message);
+          return `<p class="muted">Installations list unavailable.</p>`;
         }
       })()}
 
@@ -1173,6 +1324,25 @@ app.post("/webhook", async (req, res) => {
 // Render when you publish a new build; the app shows an update banner.
 app.get("/api/version", (req, res) => {
   res.json({ version: LATEST_VERSION, url: DOWNLOAD_URL });
+});
+
+// Called by the uninstaller (best-effort) so the dashboard knows the app was
+// removed from a machine. Device id only - no key required.
+app.get("/api/uninstall", async (req, res) => {
+  res.json({ ok: true });
+  if (!bindingEnabled) return;
+  const device = String(req.query.device || "").slice(0, 128);
+  if (!device) return;
+  try {
+    // Only flag an existing record; don't create one from a random ping
+    if ((await redis(["EXISTS", "install:" + device])) === 1) {
+      await redis(["HSET", "install:" + device,
+        "uninstalled", "1", "uninstalledAt", new Date().toISOString()]);
+      await redis(["INCR", "stats:event:uninstall"]);
+    }
+  } catch (err) {
+    console.error("uninstall record failed:", err.message);
+  }
 });
 
 // Crash telemetry from the desktop app (fire-and-forget on its side).

@@ -27,6 +27,10 @@ public:
     // Load the saved key (if any) and start re-verifying it in the background.
     void init();
 
+    // Write this PC's anonymous device id to device.id in the app data folder,
+    // so the uninstaller can tell the server this machine was removed.
+    static void writeDeviceIdFile();
+
     // Verify a user-entered key in the background; saves it on success.
     void activate(const std::string& key);
 

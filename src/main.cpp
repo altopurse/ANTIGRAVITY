@@ -137,6 +137,9 @@ int main(int, char**) {
     auto licenseManager = std::make_shared<LicenseManager>();
     licenseManager->init();
     licenseManager->checkForUpdate();
+    // Drop this PC's device id where the uninstaller can find it, so removal
+    // can be reported back to the dashboard.
+    LicenseManager::writeDeviceIdFile();
 
     // Ad banner (activation/locked screen only, server-controlled - see
     // server.js /api/ad). Background fetch + decode; texture upload happens

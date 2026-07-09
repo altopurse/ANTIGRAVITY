@@ -32,7 +32,7 @@ static std::string httpGetBody(const std::wstring& path); // defined below
 #endif
 
 #ifndef APP_VERSION
-#define APP_VERSION "1.7.0"
+#define APP_VERSION "1.8.0"
 #endif
 
 // Short OS tag for the per-license usage profile, e.g. "Win11-26200".
@@ -209,6 +209,15 @@ std::string LicenseManager::licenseFilePath() {
     std::error_code ec;
     fs::create_directories(dir, ec);
     return (dir / "license.key").string();
+}
+
+void LicenseManager::writeDeviceIdFile() {
+    const char* base = std::getenv("LOCALAPPDATA");
+    fs::path dir = base ? fs::path(base) / "AntigravityVoiceEngine" : fs::path(".");
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    std::ofstream f((dir / "device.id").string(), std::ios::trunc);
+    if (f) f << deviceId() << "\n";
 }
 
 std::string LicenseManager::loadSavedKey() {
