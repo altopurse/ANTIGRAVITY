@@ -167,6 +167,9 @@ function trackView(req, res, pageName) {
     redis(["HSETNX", "visitor:" + vid, "firstSeen", now]),
     redis(["HINCRBY", "visitor:" + vid, "views", 1]),
     redis(["SADD", "visitors", vid]),
+    // Ordered per-visitor journey (newest first), capped
+    redis(["LPUSH", "journey:" + vid, JSON.stringify({ at: now, t: "view", p: pageName })]),
+    redis(["LTRIM", "journey:" + vid, "0", "49"]),
   ]).catch((e) => console.error("trackView failed:", e.message));
   return vid;
 }
@@ -183,10 +186,35 @@ function trackEvent(req, res, name, meta = {}) {
   Promise.all([
     redis(["INCR", "stats:event:" + name]),
     redis(["HINCRBY", "visitor:" + vid, "ev_" + name, 1]),
+    redis(["HSET", "visitor:" + vid, "ev_" + name + "_at", new Date().toISOString()]),
     redis(["LPUSH", "analytics:events", entry]),
     redis(["LTRIM", "analytics:events", "0", "299"]),
+    // Same journey timeline as page views, so a visitor's clicks show inline
+    redis(["LPUSH", "journey:" + vid, JSON.stringify({ at: new Date().toISOString(), t: "event", e: name })]),
+    redis(["LTRIM", "journey:" + vid, "0", "49"]),
   ]).catch((e) => console.error("trackEvent failed:", e.message));
   return vid;
+}
+
+// Where a visitor got to in the funnel, from their event counters. Highest
+// stage reached wins. Used for the badge in the presence + visitor list.
+function visitorFunnel(v) {
+  if (v.activatedAt || Number(v.ev_purchase || 0) > 0) return { stage: "Bought", color: "#5fd18a" };
+  if (Number(v.ev_buy_click || 0) > 0) return { stage: "Clicked buy", color: "#38b0f8" };
+  if (Number(v.ev_download || 0) > 0) return { stage: "Downloaded", color: "#c99cf1" };
+  return { stage: "Browsed", color: "#9a9aa5" };
+}
+
+// Human "3m 40s" from two ISO timestamps
+function humanDuration(fromIso, toIso) {
+  const ms = Date.parse(toIso) - Date.parse(fromIso);
+  if (!(ms > 0)) return "0s";
+  const s = Math.round(ms / 1000);
+  if (s < 60) return s + "s";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + "m " + (s % 60) + "s";
+  const h = Math.floor(m / 60);
+  return h + "h " + (m % 60) + "m";
 }
 
 // ---------- license key helpers ----------
@@ -855,14 +883,17 @@ async function collectPresence(limit = 60) {
     } else if (member.startsWith("v:")) {
       const vid = member.slice(2);
       const v = flattenHash(await redis(["HGETALL", "visitor:" + vid]));
+      const f = visitorFunnel(v);
+      const dur = v.firstSeen && v.lastSeen ? humanDuration(v.firstSeen, v.lastSeen) : "";
       people.push({
         online, ts, ago,
         type: "Web",
         id: vid,
         label: "Visitor " + vid.slice(0, 8),
-        plan: v.key ? "bought" : "",
+        plan: f.stage, planColor: f.color,
         detail: [v.ref && v.ref !== "direct" ? "via " + v.ref : "direct",
-                 v.country, (v.views || "1") + " views"].filter(Boolean).join(" · "),
+                 v.country, (v.views || "1") + " views",
+                 dur && dur !== "0s" ? dur + " on site" : ""].filter(Boolean).join(" · "),
       });
     }
   }
@@ -987,6 +1018,65 @@ app.get("/admin/generate", async (req, res) => {
 
 const PLAN_COLORS = { lifetime: "#f2f2f7", monthly: "#38b0f8", trial: "#c99cf1" };
 
+// Per-visitor journey: exactly what one person did on the site, in order.
+app.get("/admin/visitor/:vid", async (req, res) => {
+  if (!adminAuthorized(req)) return res.redirect("/login");
+  const vid = String(req.params.vid || "").slice(0, 64);
+  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  try {
+    const v = flattenHash(await redis(["HGETALL", "visitor:" + vid]));
+    if (!v.firstSeen) {
+      return res.send(page("Visitor", `<h1>Unknown visitor</h1>
+        <p><a class="btn" href="/admin">← Back</a></p>`));
+    }
+    const raw = (await redis(["LRANGE", "journey:" + vid, "0", "49"])) || [];
+    const f = visitorFunnel(v);
+    const dur = v.firstSeen && v.lastSeen ? humanDuration(v.firstSeen, v.lastSeen) : "0s";
+
+    const pretty = { view: "viewed", event: "" };
+    const evLabel = { download: "clicked DOWNLOAD", buy_click: "clicked BUY", key_activated: "activated a key" };
+    const steps = raw.map((r) => {
+      let j = {}; try { j = JSON.parse(r); } catch {}
+      const when = (j.at || "").replace("T", " ").slice(0, 19);
+      if (j.t === "event") {
+        const lbl = evLabel[j.e] || j.e;
+        return `<tr><td class="muted">${esc(when)}</td>
+          <td style="color:#38b0f8;font-weight:600">${esc(lbl)}</td></tr>`;
+      }
+      return `<tr><td class="muted">${esc(when)}</td><td>viewed <strong>${esc(j.p || "page")}</strong></td></tr>`;
+    }).join("");
+
+    res.send(page("Visitor " + vid.slice(0, 8), `
+      <p><a href="/admin" style="color:#5a5a68">← Dashboard</a></p>
+      <h1>Visitor ${esc(vid.slice(0, 8))}</h1>
+      <p><span style="color:${f.color};font-weight:600">${esc(f.stage)}</span>
+         <span class="muted">· ${esc(v.country || "?")} ·
+         ${esc(v.ref && v.ref !== "direct" ? "via " + v.ref : "direct")} ·
+         ${esc(v.views || "1")} views · ${esc(dur)} on site</span></p>
+
+      <div class="card" style="margin:16px 0">
+        <div style="display:flex;gap:24px;flex-wrap:wrap">
+          <div><div class="muted" style="font-size:0.8rem">First seen</div>${esc((v.firstSeen || "").replace("T", " ").slice(0, 16))}</div>
+          <div><div class="muted" style="font-size:0.8rem">Last seen</div>${esc((v.lastSeen || "").replace("T", " ").slice(0, 16))}</div>
+          <div><div class="muted" style="font-size:0.8rem">Downloaded</div>${Number(v.ev_download || 0) > 0 ? "✓ yes" : "no"}</div>
+          <div><div class="muted" style="font-size:0.8rem">Clicked buy</div>${Number(v.ev_buy_click || 0) > 0 ? "✓ yes" : "no"}</div>
+          <div><div class="muted" style="font-size:0.8rem">Bought</div>${(v.activatedAt || Number(v.ev_purchase || 0) > 0) ? "✓ yes" : "no"}</div>
+        </div>
+      </div>
+
+      <h2>Journey (newest first)</h2>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+        <tr style="text-align:left;color:#9a9aa5"><th>When (UTC)</th><th>What</th></tr>
+        ${steps || `<tr><td colspan="2" class="muted">No steps recorded.</td></tr>`}
+      </table></div>
+      <style>td,th{padding:7px 10px;border-bottom:1px solid #2e2e3e}</style>`, { wide: true }));
+  } catch (e) {
+    console.error("visitor page failed:", e.message);
+    res.status(500).send(page("Error", `<h1>Error loading visitor</h1>`));
+  }
+});
+
 // Human-friendly dashboard: plans, status, devices, last login, OS, version.
 app.get("/admin", async (req, res) => {
   if (!adminAuthorized(req)) {
@@ -1094,17 +1184,19 @@ app.get("/admin", async (req, res) => {
             <td>${p.online
               ? `<span style="color:#5fd18a">● online</span>`
               : `<span class="muted">${rel(p.ago)}</span>`}</td>
-            <td>${esc(p.label)}</td>
+            <td>${p.type === "Web"
+              ? `<a href="/admin/visitor/${encodeURIComponent(p.id)}" style="color:#c7c7d1">${esc(p.label)}</a>`
+              : esc(p.label)}</td>
             <td>${p.type === "App"
               ? `<span style="color:#38b0f8">App</span>`
               : `<span style="color:#c99cf1">Web</span>`}</td>
-            <td>${esc(p.plan || "")}</td>
+            <td><span style="color:${p.planColor || "#9a9aa5"}">${esc(p.plan || "")}</span></td>
             <td class="muted">${esc(p.detail || "")}</td>
           </tr>`).join("");
           return `<p class="muted"><strong style="color:#5fd18a">${onlineCount}</strong> online now
-            (active in the last 5 min) · showing ${people.length} most recent</p>
+            (active in the last 5 min) · showing ${people.length} most recent · click a visitor to see their journey</p>
             <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.85rem">
-            <tr style="text-align:left;color:#9a9aa5"><th>Status</th><th>Who</th><th>Via</th><th>Plan</th><th>Details</th></tr>
+            <tr style="text-align:left;color:#9a9aa5"><th>Status</th><th>Who</th><th>Via</th><th>Stage</th><th>Details</th></tr>
             ${rows}</table></div>`;
         } catch (e) {
           console.error("presence render failed:", e.message);
