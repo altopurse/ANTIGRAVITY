@@ -463,6 +463,11 @@ void UIController::drawSettingsPanel() {
         std::string label = "Plan: Monthly";
         if (until.size() >= 10) label += " (renews " + until.substr(0, 10) + ")";
         ImGui::TextColored(ImVec4(0.39f, 0.75f, 0.86f, 1.0f), "%s", label.c_str());
+    } else if (plan == "trial") {
+        std::string until = m_license->getPaidUntil();
+        std::string label = "Plan: Trial";
+        if (until.size() >= 10) label += " (expires " + until.substr(0, 10) + ")";
+        ImGui::TextColored(ImVec4(0.79f, 0.61f, 0.95f, 1.0f), "%s", label.c_str());
     } else {
         ImGui::TextDisabled("Plan: unknown");
     }
