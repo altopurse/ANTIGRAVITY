@@ -29,6 +29,10 @@ public:
     // Monitoring
     bool monitorEnabled = false;
     float monitorVolume = 0.7f;
+    // Soundboard clip loudness on the Voice Monitor (you) only - independent
+    // of the Primary Output (what Discord/games hear), which always plays
+    // clips at their own Volume slider.
+    float soundboardMonitorVolume = 1.0f;
 
     // Soundboard
     bool duckingEnabled = true;

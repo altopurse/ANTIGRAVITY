@@ -3,6 +3,11 @@
 #include "imgui_impl_opengl3.h"
 #include <GLFW/glfw3.h>
 
+#ifdef _WIN32
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
+#endif
+
 #include "audio/AudioEngine.h"
 #include "dsp/DSPGraph.h"
 #include "dsp/Effects.h"
@@ -40,6 +45,20 @@ int main(int, char**) {
     }
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1); // Enable vsync (locks UI loop to screen refresh rate)
+
+    // GLFW doesn't automatically apply the .exe's embedded icon (installer/app.rc)
+    // to the live window - Explorer/the taskbar shortcut show it, but the running
+    // window and Alt-Tab don't unless we set it explicitly via WM_SETICON.
+#ifdef _WIN32
+    {
+        HWND hwnd = glfwGetWin32Window(window);
+        HICON hIcon = LoadIconA(GetModuleHandleA(nullptr), "IDI_ICON1");
+        if (hIcon) {
+            SendMessageA(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(hIcon));
+            SendMessageA(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(hIcon));
+        }
+    }
+#endif
 
     // 3. Setup Dear ImGui context
     IMGUI_CHECKVERSION();
@@ -86,6 +105,7 @@ int main(int, char**) {
         audioEngine->setExclusiveMode(config->exclusiveMode);
         audioEngine->setMonitorEnabled(config->monitorEnabled);
         audioEngine->setMonitorVolume(config->monitorVolume);
+        audioEngine->setSoundboardMonitorVolume(config->soundboardMonitorVolume);
         mixer->m_duckingEnabled = config->duckingEnabled;
         mixer->m_duckingAmount = config->duckingAmount;
         soundboard->setStopAllHotkey(config->stopAllHotkey);

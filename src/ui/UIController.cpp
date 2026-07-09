@@ -66,6 +66,7 @@ void UIController::captureConfig(AppConfig& cfg) const {
     cfg.exclusiveMode = m_audioEngine->isExclusiveMode();
     cfg.monitorEnabled = m_audioEngine->isMonitorEnabled();
     cfg.monitorVolume = m_audioEngine->getMonitorVolume();
+    cfg.soundboardMonitorVolume = m_audioEngine->getSoundboardMonitorVolume();
 
     auto mixer = m_soundboard->getMixer();
     cfg.duckingEnabled = mixer->m_duckingEnabled;
@@ -405,6 +406,15 @@ void UIController::drawSettingsPanel() {
     if (ImGui::SliderFloat("Monitor Vol", &monVol, 0.0f, 1.5f, "%.2f")) {
         m_audioEngine->setMonitorVolume(monVol);
     }
+    ImGui::SetItemTooltip("Volume of YOUR VOICE through the Monitor output (headphones).");
+
+    float sbMonVol = m_audioEngine->getSoundboardMonitorVolume();
+    if (ImGui::SliderFloat("Soundboard Vol (you)", &sbMonVol, 0.0f, 1.5f, "%.2f")) {
+        m_audioEngine->setSoundboardMonitorVolume(sbMonVol);
+    }
+    ImGui::SetItemTooltip("How loud soundboard clips are in YOUR headphones only.\n"
+                          "Discord/games always get clips at each clip's own Volume slider,\n"
+                          "full strength - this only turns them down for you.");
 
     ImGui::Spacing();
     ImGui::Separator();

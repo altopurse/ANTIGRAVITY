@@ -45,6 +45,7 @@ bool AppConfig::save() const {
     j << "  \"exclusiveMode\": "   << (exclusiveMode ? "true" : "false") << ",\n";
     j << "  \"monitorEnabled\": "  << (monitorEnabled ? "true" : "false") << ",\n";
     j << "  \"monitorVolume\": "   << monitorVolume << ",\n";
+    j << "  \"soundboardMonitorVolume\": " << soundboardMonitorVolume << ",\n";
     j << "  \"duckingEnabled\": "  << (duckingEnabled ? "true" : "false") << ",\n";
     j << "  \"duckingAmount\": "   << duckingAmount << ",\n";
     j << "  \"stopAllHotkey\": "   << stopAllHotkey << ",\n";
@@ -135,6 +136,7 @@ bool AppConfig::load() {
     exclusiveMode  = toBool(extractValue(json, "exclusiveMode", 0, scalarEnd), exclusiveMode);
     monitorEnabled = toBool(extractValue(json, "monitorEnabled", 0, scalarEnd), monitorEnabled);
     monitorVolume  = toFloat(extractValue(json, "monitorVolume", 0, scalarEnd), monitorVolume);
+    soundboardMonitorVolume = toFloat(extractValue(json, "soundboardMonitorVolume", 0, scalarEnd), soundboardMonitorVolume);
     duckingEnabled = toBool(extractValue(json, "duckingEnabled", 0, scalarEnd), duckingEnabled);
     duckingAmount  = toFloat(extractValue(json, "duckingAmount", 0, scalarEnd), duckingAmount);
     stopAllHotkey  = toInt(extractValue(json, "stopAllHotkey", 0, scalarEnd), stopAllHotkey);

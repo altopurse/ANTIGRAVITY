@@ -154,6 +154,9 @@ bool AudioEngine::start(const ma_device_id* inputId, const ma_device_id* primary
     if (m_soundboardScratch.size() < scratchMaxSamples) {
         m_soundboardScratch.resize(scratchMaxSamples);
     }
+    if (m_voiceOnlyScratch.size() < scratchMaxSamples) {
+        m_voiceOnlyScratch.resize(scratchMaxSamples);
+    }
 
     // 2. Initialize Monitor Playback Device (if requested and distinct)
     if (monitorOutputId != nullptr) {
@@ -249,7 +252,17 @@ void AudioEngine::primaryCallback(void* pOutput, const void* pInput, ma_uint32 f
     // The graph expects the TOTAL interleaved sample count, not frames.
     m_dspGraph->process(outBuf, totalSamples, m_channels);
 
-    // 3. Mix in the soundboard (mic ducking is applied inside the mixer).
+    // 3. Snapshot the DSP-processed mic signal before the soundboard gets
+    // mixed in, so the monitor path (step 5) can rebuild its own blend with
+    // an independent soundboard volume without touching outBuf below - that
+    // buffer is the untouched Primary Output feed (Discord/games), which
+    // always gets the soundboard at each clip's own Volume slider.
+    if (m_voiceOnlyScratch.size() < totalSamples) {
+        m_voiceOnlyScratch.resize(totalSamples);
+    }
+    std::copy(outBuf, outBuf + totalSamples, m_voiceOnlyScratch.begin());
+
+    // 4. Mix in the soundboard (mic ducking is applied inside the mixer).
     // m_soundboardScratch receives the soundboard's own mix (zeros when
     // nothing is playing) so clip playback can reach the Voice Monitor
     // output even if mic loopback monitoring is off.
@@ -258,22 +271,35 @@ void AudioEngine::primaryCallback(void* pOutput, const void* pInput, ma_uint32 f
     if (m_soundboardScratch.size() < totalSamples) {
         m_soundboardScratch.resize(totalSamples);
     }
-    m_mixer->processAndMix(outBuf, frameCount, m_channels, m_soundboardScratch.data());
+    bool soundboardActive = m_mixer->processAndMix(outBuf, frameCount, m_channels, m_soundboardScratch.data());
 
-    // 4. Monitor processed output level (VU)
+    // 5. Monitor processed output level (VU)
     updateLevel(m_outputLevel, outBuf, totalSamples);
 
-    // 5. Feed the monitor (headphone) output continuously:
-    //    - Voice Loopback ON  -> full mix (processed voice + soundboard)
-    //    - Voice Loopback OFF -> soundboard only (silence while idle)
+    // 6. Feed the monitor (headphone) output continuously, rebuilt with the
+    //    Soundboard Monitor Volume so you can hear clips quieter than what
+    //    Discord/games get (outBuf, step 4, is never touched by this):
+    //    - Voice Loopback ON  -> ducked voice + soundboard at monitor volume
+    //    - Voice Loopback OFF -> soundboard only, at monitor volume
     //    Writing every block keeps the jitter buffer primed, so soundboard
     //    hits are heard immediately regardless of the loopback toggle and
     //    there are no start/stop races between the two audio threads.
     if (m_monitorDeviceInitialized) {
-        const float* monitorSrc = m_monitorEnabled.load(std::memory_order_relaxed)
-                                      ? outBuf
-                                      : m_soundboardScratch.data();
-        size_t written = m_monitorRingBuffer.write(monitorSrc, totalSamples);
+        float sbVol = m_soundboardMonitorVolume.load(std::memory_order_relaxed);
+        bool loopbackOn = m_monitorEnabled.load(std::memory_order_relaxed);
+        // Mirrors the duck the Primary Output feed already received, so the
+        // voice level relationship (ducked while sounds play) is the same
+        // for you as for everyone else - only the soundboard loudness differs.
+        float duck = (soundboardActive && m_mixer->m_duckingEnabled) ? m_mixer->m_duckingAmount : 1.0f;
+
+        for (size_t i = 0; i < totalSamples; ++i) {
+            float mixed = (loopbackOn ? m_voiceOnlyScratch[i] * duck : 0.0f) + m_soundboardScratch[i] * sbVol;
+            if (mixed > 1.0f) mixed = 1.0f;
+            else if (mixed < -1.0f) mixed = -1.0f;
+            m_voiceOnlyScratch[i] = mixed; // reuse: this scratch's raw values are no longer needed
+        }
+
+        size_t written = m_monitorRingBuffer.write(m_voiceOnlyScratch.data(), totalSamples);
         if (written < totalSamples)
             m_dbgOverflows.fetch_add(1, std::memory_order_relaxed);
     }

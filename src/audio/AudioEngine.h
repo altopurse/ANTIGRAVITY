@@ -42,6 +42,14 @@ public:
     void setMonitorVolume(float volume) { m_monitorVolume = volume; }
     float getMonitorVolume() const { return m_monitorVolume; }
 
+    // Soundboard volume heard on the Voice Monitor (headphones) ONLY. The
+    // Primary Output (what Discord/games receive via the virtual cable)
+    // always plays each clip at its own Volume slider, full strength -
+    // this just lets you turn clips down for yourself without affecting
+    // what everyone else hears.
+    void setSoundboardMonitorVolume(float volume) { m_soundboardMonitorVolume = volume; }
+    float getSoundboardMonitorVolume() const { return m_soundboardMonitorVolume; }
+
     // Low latency settings
     void setExclusiveMode(bool exclusive) { m_exclusiveMode = exclusive; }
     bool isExclusiveMode() const { return m_exclusiveMode; }
@@ -92,10 +100,18 @@ private:
     // output whenever mic loopback monitoring is turned off.
     std::vector<float> m_soundboardScratch;
 
+    // Scratch buffer holding the DSP-processed mic signal BEFORE the
+    // soundboard is mixed in (i.e. what Mixer::processAndMix would duck).
+    // Kept so the monitor mix can be rebuilt with an independent soundboard
+    // volume without touching outBuf, which stays the untouched Primary
+    // Output (Discord/games) feed.
+    std::vector<float> m_voiceOnlyScratch;
+
     // Configuration
     std::atomic<bool> m_monitorEnabled{false};
     std::atomic<bool> m_monitorJitterBufferReady{false};
     std::atomic<float> m_monitorVolume{0.7f};
+    std::atomic<float> m_soundboardMonitorVolume{1.0f};
     std::atomic<bool> m_exclusiveMode{false};
     std::atomic<int> m_bufferSizeMs{20}; // 20ms target latency (stable default, avoids crackling)
 
