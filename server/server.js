@@ -24,6 +24,8 @@ const path = require("path");
 const app = express();
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
+// Static assets: og.png (social share preview) and favicon.ico live here.
+app.use(express.static(path.join(__dirname, "public"), { index: false }));
 
 const { MOLLIE_API_KEY, LICENSE_SECRET, BASE_URL } = process.env;
 const PORT = process.env.PORT || 3000;
@@ -229,9 +231,26 @@ async function mollie(method, path, body) {
 
 function page(title, bodyHtml, opts = {}) {
   const width = opts.wide ? 760 : 560;
+  // Social share preview (shows a proper card when the link is pasted into
+  // Discord, Twitter/X, Reddit, iMessage, etc.) - critical since sharing is
+  // the main growth channel. Same image/description across pages.
+  const desc = "Real-time voice changer + soundboard for Discord, games & calls. Pay £10 once, own it forever.";
+  const ogImg = `${BASE_URL}/og.png`;
   return `<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${title}</title>
+<meta name="description" content="${desc}">
+<link rel="icon" href="/favicon.ico">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Antigravity Voice Engine">
+<meta property="og:title" content="${title}">
+<meta property="og:description" content="${desc}">
+<meta property="og:image" content="${ogImg}">
+<meta property="og:url" content="${BASE_URL}/">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${title}">
+<meta name="twitter:description" content="${desc}">
+<meta name="twitter:image" content="${ogImg}">
 <style>
   *{box-sizing:border-box}
   body{font-family:system-ui,sans-serif;background:#0f0f14;color:#f2f2f7;display:flex;justify-content:center;
@@ -259,13 +278,16 @@ function page(title, bodyHtml, opts = {}) {
   .features li{color:#c7c7d1;font-size:0.95rem;padding-left:22px;position:relative}
   .features li::before{content:"✓";position:absolute;left:0;color:#38b0f8;font-weight:700}
   @media (max-width:520px){.features{grid-template-columns:1fr}}
+  .chip{background:#161620;border:1px solid #2e2e3e;border-radius:20px;padding:6px 14px;
+    font-size:0.85rem;color:#c7c7d1}
+  ol code{background:#0f0f14;border:1px solid #2e2e3e;border-radius:4px;padding:1px 6px;font-size:0.85rem}
   footer{margin-top:40px;color:#5a5a68;font-size:0.85rem;text-align:center}
 </style></head><body><main>${bodyHtml}</main></body></html>`;
 }
 
 // ---------- routes ----------
 
-app.get("/", (req, res) => {
+app.get("/", async (req, res) => {
   trackView(req, res, "home");
   const monthlyBtn = bindingEnabled
     ? `<div class="card">
@@ -274,53 +296,79 @@ app.get("/", (req, res) => {
          <a class="btn ghost" href="/buy?plan=monthly">Subscribe</a>
        </div>`
     : "";
+
+  // Honest social proof: real download count, only shown once it's meaningful
+  // (never a fabricated number). Falls back to nothing while it's still small.
+  let proof = "";
+  if (bindingEnabled) {
+    try {
+      const dl = Number(await redis(["GET", "stats:event:download"]) || 0);
+      if (dl >= 50) proof = `<p class="muted" style="text-align:center;margin-top:8px">Downloaded ${dl.toLocaleString()}+ times</p>`;
+    } catch {}
+  }
+
   res.send(
     page(
-      "Antigravity Voice Engine",
+      "Antigravity Voice Engine - voice changer & soundboard",
       `<div class="hero">
-         <h1>Antigravity Voice Engine &amp; Soundboard</h1>
-         <p class="tagline">Real-time, ultra-low-latency voice changer and soundboard for Windows.
-         Reshape your voice, add effects, and trigger sounds live in Discord, games, and calls.</p>
-         <a class="btn big" href="/download">Download for Windows</a>
-         <p class="muted" style="margin-top:14px">Windows may show a SmartScreen warning on
-         first run - click "More info" then "Run anyway". A license key is needed to unlock the app.</p>
+         <h1 style="font-size:2.1rem;line-height:1.15">Change your voice live.<br>Pay £10 once - own it forever.</h1>
+         <p class="tagline">A real-time voice changer <strong>and</strong> soundboard for Windows, in one
+         low-latency app. Sound like a monster, a robot, or a chipmunk - and fire off sound effects -
+         live in Discord, games, Zoom and OBS. No subscription trap.</p>
+         <a class="btn big" href="/download">Download for Windows - Free</a>
+         ${proof}
+         <p class="muted" style="margin-top:12px">Free to download - a one-time £10 key (or £2/month) unlocks it.
+         Works with Discord, Zoom, OBS, and any game.</p>
        </div>
 
-       <h2>What's inside</h2>
+       <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:24px 0">
+         <span class="chip">✓ One-time payment</span>
+         <span class="chip">✓ No account needed</span>
+         <span class="chip">✓ 2 devices per key</span>
+         <span class="chip">✓ Auto-updates</span>
+       </div>
+
+       <h2>What you get</h2>
        <ul class="features">
-         <li>8 real-time DSP effects (pitch, EQ, compressor, reverb, robotizer &amp; more)</li>
-         <li>Soundboard with global hotkeys and per-clip volume</li>
-         <li>Works with any virtual audio cable for Discord/games</li>
-         <li>Low-latency WASAPI exclusive mode</li>
-         <li>Auto-update checks</li>
-         <li>Settings and soundboard saved between sessions</li>
+         <li>8 real-time voice effects (pitch, EQ, compressor, reverb, robot &amp; more)</li>
+         <li>One-click voice presets: Deep, Chipmunk, Robot, Telephone, Monster…</li>
+         <li>Built-in soundboard with global hotkeys and per-clip volume</li>
+         <li>Ultra-low latency (WASAPI exclusive mode)</li>
+         <li>Guided first-time setup - installs the virtual mic driver for you</li>
+         <li>Your settings, presets &amp; sounds saved between sessions</li>
        </ul>
 
-       <h2>Get a license</h2>
+       <h2>Pricing</h2>
        <div class="pricing">
-         <div class="card">
-           <div>Lifetime</div>
+         <div class="card" style="border-color:#38b0f8">
+           <div>Lifetime <span style="color:#5fd18a;font-size:0.8rem">· best value</span></div>
            <div class="price">£10<span> once</span></div>
            <a class="btn" href="/buy?plan=life">Buy lifetime</a>
          </div>
          ${monthlyBtn}
        </div>
-       <p class="muted">Payment is handled by Mollie. After paying you get a license key -
-       paste it into the app's activation screen. Keep it safe, you'll need it if you reinstall.
-       Monthly keys stop working if the subscription ends.</p>
+       <p class="muted">Secure checkout via Mollie (card, PayPal &amp; more). After paying you get a
+       license key - paste it into the app and you're in. Keep it safe for reinstalls.</p>
 
-       <div style="margin:32px 0">
-       <!-- BEGIN AADS AD UNIT 2447478 -->
-
-       <div id="frame" style="width: 100%;margin: auto;position: relative; z-index: 99998;">
-                 <iframe data-aa='2447478' src='//acceptable.a-ads.com/2447478/?size=Adaptive'
-                                   style='border:0; padding:0; width:70%; height:auto; overflow:hidden;display: block;margin: auto'></iframe>
-               </div>
-
-       <!-- END AADS AD UNIT 2447478 -->
+       <h2>Installing (30 seconds)</h2>
+       <div class="card" style="text-align:left">
+         <p style="margin-top:0">Because we're a small indie studio, our installer isn't
+         "big-corporation signed" yet, so <strong>Windows shows a blue SmartScreen warning</strong> the
+         first time. It's safe - here's how to get past it:</p>
+         <ol style="color:#c7c7d1;line-height:1.7;margin:0;padding-left:20px">
+           <li>Run the downloaded <code>AntigravityVoiceEngine-Setup.exe</code></li>
+           <li>On the blue screen, click <strong style="color:#38b0f8">More info</strong></li>
+           <li>Then click <strong style="color:#38b0f8">Run anyway</strong></li>
+           <li>Follow the wizard - it even installs the virtual mic driver for you</li>
+         </ol>
        </div>
 
-       <footer>Antigravity Voice Engine</footer>`,
+       <h2>How it works with Discord / games</h2>
+       <p class="muted">The app takes your mic, applies the effects, and outputs to a virtual audio cable
+       (installed automatically). In Discord/your game, just pick <strong>"CABLE Output"</strong> as your
+       microphone - everyone now hears your new voice. The guided setup walks you through it on first launch.</p>
+
+       <footer>Antigravity Voice Engine · <a href="/download" style="color:#5a5a68">Download</a></footer>`,
       { wide: true }
     )
   );
