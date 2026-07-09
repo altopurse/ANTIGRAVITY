@@ -129,10 +129,23 @@ function visitorId(req, res) {
   return vid;
 }
 
+// A single "presence" sorted set scored by last-activity time (ms) powers the
+// most-recently-active list. Members are "v:<vid>" for web-only visitors and
+// "k:<key>" for app users; once a visitor buys, their v: entry is removed so
+// they appear as one person under their key.
+function touchPresence(member) {
+  redis(["ZADD", "presence", String(Date.now()), member]).catch(() => {});
+  // Occasionally trim to the newest 500 so the set can't grow unbounded
+  if (Math.random() < 0.03) {
+    redis(["ZREMRANGEBYRANK", "presence", "0", "-501"]).catch(() => {});
+  }
+}
+
 // Records a page view + updates the visitor's profile. Called on real pages.
 function trackView(req, res, pageName) {
   if (!bindingEnabled) return "";
   const vid = visitorId(req, res);
+  touchPresence("v:" + vid);
   const d = today();
   const country = clientCountry(req);
   const ref = refHost(req);
@@ -448,6 +461,9 @@ app.get("/key", async (req, res, next) => {
               await Promise.all([
                 redis(["HSET", "visitor:" + vid, "key", key, "plan", plan, "purchasedAt", new Date().toISOString()]),
                 redis(["HSET", "keyvisitor:" + key, "vid", vid]), // key -> visitor
+                // Collapse into one person: from now on they're tracked by key
+                redis(["ZREM", "presence", "v:" + vid]),
+                redis(["ZADD", "presence", String(Date.now()), "k:" + key]),
               ]);
             }
           }
@@ -517,6 +533,7 @@ function recordProfile(req, key, device) {
     "ip", ip.slice(0, 64),
   ];
   if (country) fields.push("country", country.slice(0, 8));
+  touchPresence("k:" + key); // app activity feeds the same recent-active list
   Promise.all([
     redis(["HSET", "profile:" + key, ...fields]),
     redis(["HSETNX", "profile:" + key, "firstSeen", now]),
@@ -683,6 +700,49 @@ app.post("/login", (req, res) => {
   }
   res.status(403).send(page("Login", `<h1>Wrong password</h1><p><a class="btn" href="/login">Try again</a></p>`));
 });
+
+// Builds the "most recently active" people list from the presence sorted set,
+// resolving each entry to a human label (key user vs web visitor) and marking
+// who's active in the last 5 minutes ("online now").
+async function collectPresence(limit = 60) {
+  const flat = (await redis(["ZREVRANGE", "presence", "0", String(limit - 1), "WITHSCORES"])) || [];
+  const now = Date.now();
+  const people = [];
+  for (let i = 0; i + 1 < flat.length; i += 2) {
+    const member = flat[i];
+    const ts = Number(flat[i + 1]);
+    const online = now - ts < 5 * 60 * 1000;
+    const ago = Math.max(0, Math.round((now - ts) / 1000));
+
+    if (member.startsWith("k:")) {
+      const key = member.slice(2);
+      const p = flattenHash(await redis(["HGETALL", "profile:" + key]));
+      const sub = flattenHash(await redis(["HGETALL", "sub:" + key]));
+      const plan = sub.plan || "lifetime";
+      people.push({
+        online, ts, ago,
+        type: "App",
+        id: key,
+        label: key.slice(0, 20) + "…",
+        plan,
+        detail: [p.os, p.appVersion ? "v" + p.appVersion : "", p.country].filter(Boolean).join(" · "),
+      });
+    } else if (member.startsWith("v:")) {
+      const vid = member.slice(2);
+      const v = flattenHash(await redis(["HGETALL", "visitor:" + vid]));
+      people.push({
+        online, ts, ago,
+        type: "Web",
+        id: vid,
+        label: "Visitor " + vid.slice(0, 8),
+        plan: v.key ? "bought" : "",
+        detail: [v.ref && v.ref !== "direct" ? "via " + v.ref : "direct",
+                 v.country, (v.views || "1") + " views"].filter(Boolean).join(" · "),
+      });
+    }
+  }
+  return people;
+}
 
 async function collectKeyData() {
   const keys = (await redis(["SMEMBERS", "keys:used"])) || [];
@@ -852,6 +912,36 @@ app.get("/admin", async (req, res) => {
         </tr>
         ${rows || `<tr><td colspan="11" class="muted">No keys yet.</td></tr>`}
       </table></div>
+
+      <h2>Recently active people</h2>
+      ${await (async () => {
+        try {
+          const people = await collectPresence(60);
+          if (!people.length) return `<p class="muted">Nobody tracked yet.</p>`;
+          const onlineCount = people.filter((p) => p.online).length;
+          const rel = (s) => s < 60 ? s + "s ago" : s < 3600 ? Math.round(s / 60) + "m ago"
+            : s < 86400 ? Math.round(s / 3600) + "h ago" : Math.round(s / 86400) + "d ago";
+          const rows = people.map((p) => `<tr>
+            <td>${p.online
+              ? `<span style="color:#5fd18a">● online</span>`
+              : `<span class="muted">${rel(p.ago)}</span>`}</td>
+            <td>${esc(p.label)}</td>
+            <td>${p.type === "App"
+              ? `<span style="color:#38b0f8">App</span>`
+              : `<span style="color:#c99cf1">Web</span>`}</td>
+            <td>${esc(p.plan || "")}</td>
+            <td class="muted">${esc(p.detail || "")}</td>
+          </tr>`).join("");
+          return `<p class="muted"><strong style="color:#5fd18a">${onlineCount}</strong> online now
+            (active in the last 5 min) · showing ${people.length} most recent</p>
+            <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+            <tr style="text-align:left;color:#9a9aa5"><th>Status</th><th>Who</th><th>Via</th><th>Plan</th><th>Details</th></tr>
+            ${rows}</table></div>`;
+        } catch (e) {
+          console.error("presence render failed:", e.message);
+          return `<p class="muted">Presence list unavailable.</p>`;
+        }
+      })()}
 
       <h2>Website analytics</h2>
       ${await (async () => {
