@@ -1,9 +1,11 @@
 #include "UIController.h"
 #include "dsp/Effects.h"
+#include "dsp/DspPresets.h"
 #include "imgui.h"
 #include <iostream>
 #include <algorithm>
 #include <cstring>
+#include <cmath>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -13,6 +15,38 @@
 #ifndef APP_VERSION
 #define APP_VERSION "dev"
 #endif
+
+namespace {
+
+// In-place iterative radix-2 FFT (real input in re[], im[] zeroed by caller).
+// n must be a power of two. Plenty fast for the 512-point display spectrum.
+void fft(float* re, float* im, int n) {
+    for (int i = 1, j = 0; i < n; ++i) { // bit-reversal permutation
+        int bit = n >> 1;
+        for (; j & bit; bit >>= 1) j ^= bit;
+        j ^= bit;
+        if (i < j) { std::swap(re[i], re[j]); std::swap(im[i], im[j]); }
+    }
+    for (int len = 2; len <= n; len <<= 1) {
+        float ang = -6.28318530718f / static_cast<float>(len);
+        float wr = std::cos(ang), wi = std::sin(ang);
+        for (int i = 0; i < n; i += len) {
+            float cr = 1.0f, ci = 0.0f;
+            for (int k = 0; k < len / 2; ++k) {
+                int a = i + k, b = i + k + len / 2;
+                float tr = re[b] * cr - im[b] * ci;
+                float ti = re[b] * ci + im[b] * cr;
+                re[b] = re[a] - tr; im[b] = im[a] - ti;
+                re[a] += tr;        im[a] += ti;
+                float ncr = cr * wr - ci * wi;
+                ci = cr * wi + ci * wr;
+                cr = ncr;
+            }
+        }
+    }
+}
+
+} // namespace
 
 UIController::UIController(
     std::shared_ptr<AudioEngine> audioEngine,
@@ -25,6 +59,9 @@ UIController::UIController(
     m_license(license), m_config(config), m_adBanner(adBanner) {
     applyDarkModernTheme();
     applyConfigDevices();
+
+    // First launch (or wizard never finished): walk through device setup
+    m_showWizard = m_config && !m_config->setupDone;
 
     // Pre-fill the activation field with whatever key last worked on this
     // PC (survives Reset License Key) so the user isn't stuck retyping it.
@@ -83,6 +120,9 @@ void UIController::captureConfig(AppConfig& cfg) const {
         c.loop = clip->loop;
         cfg.clips.push_back(c);
     }
+
+    // Whole DSP chain (order, enabled flags, params) survives restarts
+    cfg.dspState = DspPresets::serialize(*m_dspGraph);
 }
 
 void UIController::render() {
@@ -92,8 +132,25 @@ void UIController::render() {
         return;
     }
 
+    // First-launch device setup wizard
+    if (m_showWizard) {
+        drawSetupWizard();
+        return;
+    }
+
     // Poll global soundboard hotkeys in the UI thread
     m_soundboard->updateHotkeys();
+
+    // Quick keys: 1-9 play soundboard clips 1-9 while the app is focused
+    // (skipped while any text field wants keyboard input)
+    if (!ImGui::GetIO().WantTextInput && m_bindingClip == nullptr && !m_bindingStopAll) {
+        auto& clips = m_soundboard->getClips();
+        for (int n = 0; n < 9 && n < static_cast<int>(clips.size()); ++n) {
+            if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_1 + n), false)) {
+                m_soundboard->playClip(clips[n]);
+            }
+        }
+    }
 
     // Check if we are binding a hotkey (clip or the global stop-all)
     if (m_bindingClip != nullptr || m_bindingStopAll) {
@@ -289,8 +346,147 @@ void UIController::drawActivationScreen() {
     ImGui::End();
 }
 
+void UIController::drawSetupWizard() {
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->WorkPos);
+    ImGui::SetNextWindowSize(viewport->WorkSize);
+    ImGui::Begin("SetupWizard", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
+
+    float colWidth = 560.0f;
+    float startX = (viewport->WorkSize.x - colWidth) * 0.5f;
+    if (startX < 0) startX = 0;
+    auto indent = [startX]() { ImGui::SetCursorPosX(startX); };
+
+    ImGui::SetCursorPosY(viewport->WorkSize.y * 0.10f);
+    indent(); ImGui::TextColored(ImVec4(0.22f, 0.74f, 0.97f, 1.0f), "WELCOME - FIRST-TIME SETUP");
+    indent(); ImGui::TextDisabled("Three choices and you're live. You can change all of this later in Settings.");
+    indent(); ImGui::Separator();
+    ImGui::Spacing();
+
+    const auto& inputs = m_audioEngine->getInputDevices();
+    const auto& outputs = m_audioEngine->getOutputDevices();
+
+    // VB-CABLE detection drives both the hint text and output preselection
+    int cableIdx = -1;
+    for (size_t i = 0; i < outputs.size(); ++i) {
+        if (outputs[i].name.find("CABLE Input") != std::string::npos) {
+            cableIdx = static_cast<int>(i);
+            break;
+        }
+    }
+    // Preselect sensible defaults once (cable for output, default device for monitor)
+    static bool preselected = false;
+    if (!preselected && !outputs.empty()) {
+        if (cableIdx >= 0 && m_config->outputDevice.empty()) m_selectedOutputIdx = cableIdx;
+        if (m_config->monitorDevice.empty()) {
+            for (size_t i = 0; i < outputs.size(); ++i) {
+                if (outputs[i].isDefault) { m_selectedMonitorIdx = static_cast<int>(i); break; }
+            }
+        }
+        preselected = true;
+    }
+
+    // 1. Microphone
+    indent(); ImGui::Text("1. Your microphone");
+    indent(); ImGui::SetNextItemWidth(colWidth);
+    std::string prevIn = inputs.empty() ? "No microphones found" :
+        (m_selectedInputIdx < static_cast<int>(inputs.size()) ? inputs[m_selectedInputIdx].name : "Select");
+    if (ImGui::BeginCombo("##wizmic", prevIn.c_str())) {
+        for (int i = 0; i < static_cast<int>(inputs.size()); ++i) {
+            ImGui::PushID(i);
+            if (ImGui::Selectable(inputs[i].name.c_str(), m_selectedInputIdx == i)) m_selectedInputIdx = i;
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::Spacing();
+
+    // 2. Where Discord/games listen
+    indent(); ImGui::Text("2. Output that Discord/games will use as your mic");
+    if (cableIdx >= 0) {
+        indent(); ImGui::TextColored(ImVec4(0.39f, 0.86f, 0.39f, 1.0f),
+                                     "VB-CABLE detected - pick 'CABLE Input' below.");
+    } else {
+        indent(); ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1.0f),
+                                     "VB-CABLE not found. Without it, others can't hear your effects.");
+        indent();
+        if (ImGui::Button("Get VB-CABLE (free)")) {
+#ifdef _WIN32
+            ShellExecuteA(nullptr, "open", "https://vb-audio.com/Cable/", nullptr, nullptr, SW_SHOWNORMAL);
+#endif
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("I installed it - refresh devices")) {
+            m_audioEngine->refreshDevices();
+            preselected = false; // re-run cable preselection with new list
+        }
+    }
+    indent(); ImGui::SetNextItemWidth(colWidth);
+    std::string prevOut = outputs.empty() ? "No outputs found" :
+        (m_selectedOutputIdx < static_cast<int>(outputs.size()) ? outputs[m_selectedOutputIdx].name : "Select");
+    if (ImGui::BeginCombo("##wizout", prevOut.c_str())) {
+        for (int i = 0; i < static_cast<int>(outputs.size()); ++i) {
+            ImGui::PushID(i);
+            if (ImGui::Selectable(outputs[i].name.c_str(), m_selectedOutputIdx == i)) m_selectedOutputIdx = i;
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::Spacing();
+
+    // 3. Headphones
+    indent(); ImGui::Text("3. Your headphones (to hear the soundboard and yourself)");
+    indent(); ImGui::SetNextItemWidth(colWidth);
+    std::string prevMon = outputs.empty() ? "No outputs found" :
+        (m_selectedMonitorIdx < static_cast<int>(outputs.size()) ? outputs[m_selectedMonitorIdx].name : "Select");
+    if (ImGui::BeginCombo("##wizmon", prevMon.c_str())) {
+        for (int i = 0; i < static_cast<int>(outputs.size()); ++i) {
+            ImGui::PushID(i);
+            if (ImGui::Selectable(outputs[i].name.c_str(), m_selectedMonitorIdx == i)) m_selectedMonitorIdx = i;
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+
+    ImGui::Spacing();
+    indent(); ImGui::Separator();
+    ImGui::Spacing();
+
+    indent();
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.6f, 0.2f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.8f, 0.3f, 1.0f));
+    if (ImGui::Button("FINISH & START ENGINE", ImVec2(colWidth * 0.65f, 40))) {
+        const ma_device_id* pInId = (!inputs.empty() && m_selectedInputIdx < static_cast<int>(inputs.size())) ? &inputs[m_selectedInputIdx].id : nullptr;
+        const ma_device_id* pOutId = (!outputs.empty() && m_selectedOutputIdx < static_cast<int>(outputs.size())) ? &outputs[m_selectedOutputIdx].id : nullptr;
+        const ma_device_id* pMonId = (!outputs.empty() && m_selectedMonitorIdx < static_cast<int>(outputs.size())) ? &outputs[m_selectedMonitorIdx].id : nullptr;
+        if (m_audioEngine->start(pInId, pOutId, pMonId)) {
+            m_statusMessage = "Running (Sample Rate: " + std::to_string(static_cast<int>(m_audioEngine->getSampleRate())) + "Hz)";
+            m_isStatusError = false;
+        } else {
+            m_statusMessage = "Failed to start engine. Check device configuration.";
+            m_isStatusError = true;
+        }
+        m_config->setupDone = true;
+        m_showWizard = false;
+    }
+    ImGui::PopStyleColor(2);
+    ImGui::SameLine();
+    if (ImGui::Button("Skip for now", ImVec2(colWidth * 0.32f, 40))) {
+        m_config->setupDone = true;
+        m_showWizard = false;
+    }
+
+    ImGui::Spacing();
+    indent(); ImGui::TextDisabled("Tip: in Discord/your game, set the MICROPHONE to 'CABLE Output (VB-Audio Virtual Cable)'.");
+
+    ImGui::End();
+}
+
 void UIController::drawSettingsPanel() {
-    ImGui::BeginChild("SettingsChild", ImVec2(0, 430), true);
+    // Scrolls internally; VU meters below get the remaining column height
+    ImGui::BeginChild("SettingsChild", ImVec2(0, 470), true);
     ImGui::Text("Device Configuration");
     ImGui::Separator();
     ImGui::Spacing();
@@ -490,6 +686,21 @@ void UIController::drawSettingsPanel() {
                           "Frees the device slot so the key can be used on another PC.\n"
                           "You'll need to enter a license key again to use the app.");
 
+    // Refer a friend
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    ImGui::TextDisabled("Like the app? Share it");
+    if (ImGui::Button("Copy link for a friend", ImVec2(-1, 0))) {
+        ImGui::SetClipboardText("https://antigravity-license.onrender.com/");
+        m_shareCopiedTimer = 2.5f;
+    }
+    ImGui::SetItemTooltip("Copies the download page link to your clipboard.");
+    if (m_shareCopiedTimer > 0.0f) {
+        m_shareCopiedTimer -= ImGui::GetIO().DeltaTime;
+        ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.5f, 1.0f), "Copied! Paste it anywhere.");
+    }
+
     ImGui::EndChild();
 }
 
@@ -526,6 +737,35 @@ void UIController::drawVUMeters() {
     ImGui::Text("Output Mix:");
     ImGui::ProgressBar(outVal, ImVec2(-1, 16), "");
 
+    // Waveform + spectrum of the processed output
+    if (m_audioEngine->isActive()) {
+        m_audioEngine->copyVizSnapshot(m_vizSnap);
+
+        ImGui::Spacing();
+        ImGui::Text("Waveform:");
+        ImGui::PlotLines("##waveform", m_vizSnap, 1024, 0, nullptr, -1.0f, 1.0f,
+                         ImVec2(-1, 46));
+
+        // 512-point FFT of the newest half of the snapshot, Hann-windowed
+        static float re[512], im[512];
+        for (int i = 0; i < 512; ++i) {
+            float w = 0.5f - 0.5f * std::cos(6.28318530718f * i / 511.0f);
+            re[i] = m_vizSnap[512 + i] * w;
+            im[i] = 0.0f;
+        }
+        fft(re, im, 512);
+        for (int b = 0; b < 64; ++b) {
+            // First 64 bins cover 0..~6 kHz at 48 kHz - the voice range
+            float mag = std::sqrt(re[b + 1] * re[b + 1] + im[b + 1] * im[b + 1]);
+            float db = std::log10(1.0f + 12.0f * mag); // gentle log scaling
+            // Smooth: fast attack, slow decay (like the VU meters)
+            m_spectrum[b] = db > m_spectrum[b] ? db : m_spectrum[b] * 0.85f + db * 0.15f;
+        }
+        ImGui::Text("Spectrum (0-6 kHz):");
+        ImGui::PlotHistogram("##spectrum", m_spectrum, 64, 0, nullptr, 0.0f, 2.2f,
+                             ImVec2(-1, 46));
+    }
+
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Text("Diagnostic Telemetry:");
@@ -551,6 +791,72 @@ void UIController::drawDSPGraphPanel() {
     ImGui::Text("Real-Time DSP Chain Editor");
     ImGui::Separator();
     ImGui::Spacing();
+
+    // ----- Preset bar: load factory/user presets, save the current chain -----
+    {
+        auto presets = DspPresets::list();
+        if (m_selectedPresetIdx >= static_cast<int>(presets.size())) m_selectedPresetIdx = 0;
+
+        std::string preview = presets.empty() ? "No presets" :
+            presets[m_selectedPresetIdx].name + (presets[m_selectedPresetIdx].builtIn ? "  [built-in]" : "");
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.45f);
+        if (ImGui::BeginCombo("##preset", preview.c_str())) {
+            for (int i = 0; i < static_cast<int>(presets.size()); ++i) {
+                ImGui::PushID(i);
+                std::string label = presets[i].name + (presets[i].builtIn ? "  [built-in]" : "");
+                if (ImGui::Selectable(label.c_str(), m_selectedPresetIdx == i)) m_selectedPresetIdx = i;
+                ImGui::PopID();
+            }
+            ImGui::EndCombo();
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button("Load") && !presets.empty()) {
+            std::string blob = DspPresets::get(presets[m_selectedPresetIdx].name);
+            if (!blob.empty()) {
+                DspPresets::apply(*m_dspGraph, blob);
+                m_presetStatus = "Loaded '" + presets[m_selectedPresetIdx].name + "'";
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Save as...")) {
+            ImGui::OpenPopup("SavePresetPopup");
+        }
+        ImGui::SameLine();
+        ImGui::BeginDisabled(presets.empty() || presets[m_selectedPresetIdx].builtIn);
+        if (ImGui::Button("Delete") && !presets.empty()) {
+            DspPresets::remove(presets[m_selectedPresetIdx].name);
+            m_presetStatus = "Deleted '" + presets[m_selectedPresetIdx].name + "'";
+            m_selectedPresetIdx = 0;
+        }
+        ImGui::EndDisabled();
+
+        if (ImGui::BeginPopup("SavePresetPopup")) {
+            ImGui::Text("Save current chain as:");
+            ImGui::SetNextItemWidth(220.0f);
+            ImGui::InputTextWithHint("##presetname", "My preset", m_presetNameInput, sizeof(m_presetNameInput));
+            if (ImGui::Button("Save", ImVec2(100, 0))) {
+                std::string name = m_presetNameInput;
+                if (!name.empty()) {
+                    if (DspPresets::save(name, DspPresets::serialize(*m_dspGraph))) {
+                        m_presetStatus = "Saved '" + name + "'";
+                    } else {
+                        m_presetStatus = "Can't use that name (built-in presets are protected)";
+                    }
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel", ImVec2(100, 0))) ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
+
+        if (!m_presetStatus.empty()) {
+            ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.5f, 1.0f), "%s", m_presetStatus.c_str());
+        }
+        ImGui::Separator();
+        ImGui::Spacing();
+    }
 
     const auto& nodes = m_dspGraph->getNodes();
     

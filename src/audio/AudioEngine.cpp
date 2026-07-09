@@ -276,6 +276,20 @@ void AudioEngine::primaryCallback(void* pOutput, const void* pInput, ma_uint32 f
     // 5. Monitor processed output level (VU)
     updateLevel(m_outputLevel, outBuf, totalSamples);
 
+    // 5b. Feed the waveform/spectrum display: mono-fold each output frame
+    // into the viz ring. Plain stores; the UI thread reads without locking
+    // (an occasional torn sample is invisible in a scope drawing).
+    {
+        size_t pos = m_vizWritePos.load(std::memory_order_relaxed);
+        for (ma_uint32 f = 0; f < frameCount; ++f) {
+            float mono = 0.0f;
+            for (int c = 0; c < m_channels; ++c) mono += outBuf[f * m_channels + c];
+            m_vizBuffer[pos & (kVizSize - 1)] = mono / static_cast<float>(m_channels);
+            ++pos;
+        }
+        m_vizWritePos.store(pos, std::memory_order_relaxed);
+    }
+
     // 6. Feed the monitor (headphone) output continuously, rebuilt with the
     //    Soundboard Monitor Volume so you can hear clips quieter than what
     //    Discord/games get (outBuf, step 4, is never touched by this):
@@ -352,6 +366,13 @@ void AudioEngine::monitorCallback(void* pOutput, ma_uint32 frameCount) {
         if (s > 1.0f) s = 1.0f;
         else if (s < -1.0f) s = -1.0f;
         outBuf[i] = s;
+    }
+}
+
+void AudioEngine::copyVizSnapshot(float* out) const {
+    size_t pos = m_vizWritePos.load(std::memory_order_relaxed);
+    for (size_t i = 0; i < kVizSize; ++i) {
+        out[i] = m_vizBuffer[(pos + i) & (kVizSize - 1)]; // oldest -> newest
     }
 }
 

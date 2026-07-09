@@ -35,6 +35,12 @@ public:
     // Live levels (for VU meters)
     float getMicLevel() const { return m_micLevel.load(); }
     float getOutputLevel() const { return m_outputLevel.load(); }
+
+    // Visualization tap: copies the most recent kVizSize mono output samples
+    // (oldest first) into out. Lock-free by design - the audio thread keeps
+    // writing while we copy, and a possible tear is harmless for drawing.
+    static constexpr size_t kVizSize = 1024;
+    void copyVizSnapshot(float* out) const;
     
     // Monitoring Controls
     void setMonitorEnabled(bool enabled) { m_monitorEnabled = enabled; }
@@ -121,6 +127,10 @@ private:
     // VU levels
     std::atomic<float> m_micLevel{0.0f};
     std::atomic<float> m_outputLevel{0.0f};
+
+    // Ring of recent mono output samples for the waveform/spectrum display
+    float m_vizBuffer[kVizSize] = {};
+    std::atomic<size_t> m_vizWritePos{0};
 
     // Diagnostic atomics
     std::atomic<uint64_t> m_dbgUnderflows{0};

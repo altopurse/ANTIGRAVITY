@@ -54,8 +54,24 @@ private:
     // License activation input buffer
     char m_licenseKeyInput[128] = {0};
 
+    // First-launch setup wizard (shown until finished or skipped once)
+    bool m_showWizard = false;
+
+    // DSP preset UI state
+    int m_selectedPresetIdx = 0;
+    char m_presetNameInput[64] = {0};
+    std::string m_presetStatus;
+
+    // "Copied!" feedback timer for the share button
+    float m_shareCopiedTimer = 0.0f;
+
+    // Waveform/spectrum scratch (snapshot of the engine's viz tap)
+    float m_vizSnap[1024] = {0};
+    float m_spectrum[64] = {0};
+
     // Helpers to draw specific sections
     void drawActivationScreen();
+    void drawSetupWizard();
     void drawSettingsPanel();
     void drawVUMeters();
     void drawDSPGraphPanel();

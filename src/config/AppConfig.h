@@ -40,6 +40,13 @@ public:
     int stopAllHotkey = -1;
     std::vector<ClipConfig> clips;
 
+    // Whole DSP chain state (DspPresets::serialize blob) so effect settings
+    // survive restarts too
+    std::string dspState;
+
+    // First-launch setup wizard: shown until completed or skipped once
+    bool setupDone = false;
+
     // %APPDATA%/Antigravity/config.json (folder created on demand)
     static std::string configFilePath();
 

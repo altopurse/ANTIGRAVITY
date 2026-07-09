@@ -3,6 +3,7 @@
 #include <vector>
 #include <memory>
 #include <mutex>
+#include <string>
 
 class DSPGraph {
 public:
@@ -18,6 +19,10 @@ public:
     // Reorder nodes in the processing graph
     void moveNodeUp(size_t index);
     void moveNodeDown(size_t index);
+
+    // Rearrange the chain to match the given node-name order (names not
+    // listed keep their relative order at the end). Used by presets.
+    void reorder(const std::vector<std::string>& names);
     
     const std::vector<std::unique_ptr<DSPNode>>& getNodes() const { return m_nodes; }
 

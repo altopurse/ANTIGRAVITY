@@ -2,7 +2,7 @@
 ; Compiled by package.ps1 (paths below are relative to this file).
 
 #define AppName "Antigravity Voice Engine"
-#define AppVersion "1.6.1"
+#define AppVersion "1.7.0"
 #define AppExe "voice-changer.exe"
 
 [Setup]
@@ -26,6 +26,9 @@ UninstallDisplayIcon={app}\{#AppExe}
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Shortcuts:"
+; Checked by default: without VB-CABLE the app's output can't reach
+; Discord/games. Skipped automatically if the driver is already present.
+Name: "vbcable"; Description: "Download and install the VB-CABLE virtual audio driver (needed for Discord/games)"; GroupDescription: "Audio driver:"; Check: not VBCableInstalled
 
 [Files]
 Source: "..\build\bin\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
@@ -39,11 +42,82 @@ Name: "{userdesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName} now"; Flags: nowait postinstall skipifsilent
-; VB-Audio does not permit redistributing VB-CABLE, so offer their official
-; download page instead of bundling the driver. Checked by default since it's
-; required for the app's output to reach Discord/games - user can untick it.
-Filename: "https://vb-audio.com/Cable/"; Description: "Get VB-CABLE (virtual mic driver - REQUIRED for Discord/games)"; Flags: shellexec nowait postinstall skipifsilent
 
 [UninstallDelete]
 ; imgui.ini is created at runtime next to the exe
 Type: files; Name: "{app}\imgui.ini"
+
+[Code]
+// VB-Audio doesn't permit redistributing VB-CABLE inside other installers,
+// so it's downloaded from their official server at install time, extracted,
+// and its own setup is launched (needs one UAC click + their Install button).
+var
+  DownloadPage: TDownloadWizardPage;
+
+function VBCableInstalled: Boolean;
+begin
+  // The driver registers this service name when installed
+  Result := RegKeyExists(HKLM, 'SYSTEM\CurrentControlSet\Services\VBAudioVACWDM');
+end;
+
+function OnDownloadProgress(const Url, FileName: String; const Progress, ProgressMax: Int64): Boolean;
+begin
+  Result := True;
+end;
+
+procedure InitializeWizard;
+begin
+  DownloadPage := CreateDownloadPage('Downloading VB-CABLE',
+    'Getting the virtual audio driver from vb-audio.com...', @OnDownloadProgress);
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if (CurPageID = wpReady) and WizardIsTaskSelected('vbcable') then begin
+    DownloadPage.Clear;
+    DownloadPage.Add('https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip', 'vbcable.zip', '');
+    DownloadPage.Show;
+    try
+      try
+        DownloadPage.Download;
+      except
+        // Download failed (offline / URL moved): not fatal, the app installs
+        // fine; the post-install step falls back to opening their website.
+        Log('VB-CABLE download failed: ' + GetExceptionMessage);
+      end;
+    finally
+      DownloadPage.Hide;
+    end;
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
+  ZipPath, ExtractDir, DriverSetup: String;
+begin
+  if (CurStep = ssPostInstall) and WizardIsTaskSelected('vbcable') then begin
+    ZipPath := ExpandConstant('{tmp}\vbcable.zip');
+    ExtractDir := ExpandConstant('{tmp}\vbcable');
+    DriverSetup := ExtractDir + '\VBCABLE_Setup_x64.exe';
+
+    if FileExists(ZipPath) then begin
+      Exec('powershell.exe',
+           '-NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath ''' +
+           ZipPath + ''' -DestinationPath ''' + ExtractDir + ''' -Force"',
+           '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    end;
+
+    if FileExists(DriverSetup) then begin
+      MsgBox('VB-CABLE''s own installer will open now (Windows will ask for admin permission).' + #13#10 +
+             'Click "Install Driver" in it, then reboot when it says so.', mbInformation, MB_OK);
+      // Driver installation requires elevation; 'runas' shows the UAC prompt
+      if not ShellExec('runas', DriverSetup, '', ExtractDir, SW_SHOWNORMAL, ewWaitUntilTerminated, ResultCode) then
+        ShellExec('open', 'https://vb-audio.com/Cable/', '', '', SW_SHOWNORMAL, ewNoWait, ResultCode);
+    end else begin
+      // Zip missing or extraction failed: open the official page instead
+      ShellExec('open', 'https://vb-audio.com/Cable/', '', '', SW_SHOWNORMAL, ewNoWait, ResultCode);
+    end;
+  end;
+end;

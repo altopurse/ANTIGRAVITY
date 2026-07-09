@@ -34,6 +34,26 @@ void DSPGraph::moveNodeUp(size_t index) {
     }
 }
 
+void DSPGraph::reorder(const std::vector<std::string>& names) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::vector<std::unique_ptr<DSPNode>> result;
+    result.reserve(m_nodes.size());
+    for (const auto& name : names) {
+        for (auto& node : m_nodes) {
+            if (node && name == node->getName()) {
+                result.push_back(std::move(node));
+                break;
+            }
+        }
+    }
+    // Keep any nodes the preset didn't mention (e.g. effects added in a
+    // newer app version) in their existing relative order at the end.
+    for (auto& node : m_nodes) {
+        if (node) result.push_back(std::move(node));
+    }
+    m_nodes = std::move(result);
+}
+
 void DSPGraph::moveNodeDown(size_t index) {
     std::lock_guard<std::mutex> lock(m_mutex);
     // Guard against underflow: if m_nodes is empty, m_nodes.size() - 1 would

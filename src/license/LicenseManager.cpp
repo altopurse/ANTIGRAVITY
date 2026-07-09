@@ -32,7 +32,7 @@ static std::string httpGetBody(const std::wstring& path); // defined below
 #endif
 
 #ifndef APP_VERSION
-#define APP_VERSION "1.6.1"
+#define APP_VERSION "1.7.0"
 #endif
 
 // Short OS tag for the per-license usage profile, e.g. "Win11-26200".

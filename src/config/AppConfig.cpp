@@ -49,6 +49,8 @@ bool AppConfig::save() const {
     j << "  \"duckingEnabled\": "  << (duckingEnabled ? "true" : "false") << ",\n";
     j << "  \"duckingAmount\": "   << duckingAmount << ",\n";
     j << "  \"stopAllHotkey\": "   << stopAllHotkey << ",\n";
+    j << "  \"setupDone\": "       << (setupDone ? "true" : "false") << ",\n";
+    j << "  \"dspState\": \""      << jsonEscape(dspState) << "\",\n";
     j << "  \"clips\": [\n";
     for (size_t i = 0; i < clips.size(); ++i) {
         const ClipConfig& c = clips[i];
@@ -140,6 +142,8 @@ bool AppConfig::load() {
     duckingEnabled = toBool(extractValue(json, "duckingEnabled", 0, scalarEnd), duckingEnabled);
     duckingAmount  = toFloat(extractValue(json, "duckingAmount", 0, scalarEnd), duckingAmount);
     stopAllHotkey  = toInt(extractValue(json, "stopAllHotkey", 0, scalarEnd), stopAllHotkey);
+    setupDone      = toBool(extractValue(json, "setupDone", 0, scalarEnd), setupDone);
+    dspState       = extractValue(json, "dspState", 0, scalarEnd);
 
     clips.clear();
     if (clipsPos != std::string::npos) {

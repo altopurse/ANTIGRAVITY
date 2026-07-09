@@ -17,6 +17,8 @@
 #include "license/LicenseManager.h"
 #include "config/AppConfig.h"
 #include "ads/AdBanner.h"
+#include "dsp/DspPresets.h"
+#include "util/CrashReporter.h"
 
 #include <iostream>
 #include <memory>
@@ -26,6 +28,9 @@ static void glfwErrorCallback(int error, const char* description) {
 }
 
 int main(int, char**) {
+    // 0. Crash telemetry (best-effort ping + local crash.txt on hard crashes)
+    CrashReporter::install();
+
     // 1. Setup GLFW error callback
     glfwSetErrorCallback(glfwErrorCallback);
     if (!glfwInit()) {
@@ -120,6 +125,10 @@ int main(int, char**) {
                     break;
                 }
             }
+        }
+        // Restore the whole DSP chain (effect order, enabled flags, params)
+        if (!config->dspState.empty()) {
+            DspPresets::apply(*dspGraph, config->dspState);
         }
     }
 

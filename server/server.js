@@ -724,6 +724,27 @@ app.get("/admin", async (req, res) => {
         </tr>
         ${rows || `<tr><td colspan="11" class="muted">No keys yet.</td></tr>`}
       </table></div>
+
+      <h2>Recent crashes</h2>
+      ${await (async () => {
+        try {
+          const total = await redis(["LLEN", "crashes"]);
+          if (!total) return `<p class="muted">No crashes reported. Nice.</p>`;
+          const raw = (await redis(["LRANGE", "crashes", "0", "9"])) || [];
+          const crashRows = raw.map((r) => {
+            let c = {};
+            try { c = JSON.parse(r); } catch {}
+            return `<tr><td>${esc((c.at || "").replace("T", " ").slice(0, 16))}</td>
+              <td>${esc(c.v || "")}</td><td>${esc(c.os || "")}</td>
+              <td>${esc(c.kind || "")}</td><td><code>${esc(c.code || "")}</code></td></tr>`;
+          }).join("");
+          return `<p class="muted">${total} total (showing latest 10)</p>
+            <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+            <tr style="text-align:left;color:#9a9aa5"><th>When (UTC)</th><th>App</th><th>OS</th><th>Kind</th><th>Code</th></tr>
+            ${crashRows}</table></div>`;
+        } catch { return `<p class="muted">Crash log unavailable.</p>`; }
+      })()}
+
       <style>td,th{padding:8px 10px;border-bottom:1px solid #2e2e3e} td a{color:#f47272} .muted{color:#9a9aa5}</style>`,
       { wide: true }));
   } catch (err) {
@@ -763,6 +784,26 @@ app.post("/webhook", async (req, res) => {
 // Render when you publish a new build; the app shows an update banner.
 app.get("/api/version", (req, res) => {
   res.json({ version: LATEST_VERSION, url: DOWNLOAD_URL });
+});
+
+// Crash telemetry from the desktop app (fire-and-forget on its side).
+// Kept as a capped list; readable only through the admin dashboard.
+app.get("/api/crash", async (req, res) => {
+  res.json({ ok: true }); // answer instantly - a dying app is waiting
+  if (!bindingEnabled) return;
+  try {
+    const entry = JSON.stringify({
+      at: new Date().toISOString(),
+      v: String(req.query.v || "").slice(0, 32),
+      os: String(req.query.os || "").slice(0, 64),
+      kind: String(req.query.kind || "").slice(0, 16),
+      code: String(req.query.code || "").slice(0, 24),
+    });
+    await redis(["LPUSH", "crashes", entry]);
+    await redis(["LTRIM", "crashes", "0", "199"]);
+  } catch (err) {
+    console.error("crash record failed:", err.message);
+  }
 });
 
 // Ad banner shown on the app's activation (locked) screen for unlicensed
