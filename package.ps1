@@ -97,9 +97,24 @@ $publishDir = Join-Path $root "server\public\downloads"
 New-Item -ItemType Directory -Force -Path $publishDir | Out-Null
 Copy-Item -Force (Join-Path $dist "AntigravityVoiceEngine-Setup.exe") -Destination $publishDir
 
+# Anti-tamper: compute the exe's self-hash (same FNV-1a the app reports on
+# /api/verify as &h=). Set this as EXPECTED_HASH in Render for THIS release so
+# the dashboard can flag any machine reporting a different (patched) binary.
+$exeForHash = Join-Path $root "build\bin\voice-changer.exe"
+$expectedHash = ""
+$nodeExe = (Get-Command node -ErrorAction SilentlyContinue).Source
+if ($nodeExe -and (Test-Path $exeForHash)) {
+    $expectedHash = & node -e "const fs=require('fs');let h=1469598103934665603n;const p=1099511628211n;const m=(1n<<64n)-1n;for(const b of fs.readFileSync(process.argv[1])){h=(h^BigInt(b))&m;h=(h*p)&m;}console.log(h.toString(16).padStart(16,'0'));" "$exeForHash"
+}
+
 Write-Output "=================================================="
 Write-Output "Package ready: $dist\AntigravityVoiceEngine-Setup.exe"
 Write-Output "Also copied to: $publishDir\AntigravityVoiceEngine-Setup.exe"
+if ($expectedHash) {
+    Write-Output ""
+    Write-Output "Anti-tamper: set this in Render for this release ->"
+    Write-Output "  EXPECTED_HASH = $expectedHash"
+}
 Write-Output ""
 Write-Output "To publish this build on the website:"
 Write-Output "  git add server/public/downloads/AntigravityVoiceEngine-Setup.exe"

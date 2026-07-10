@@ -132,6 +132,12 @@ private:
     float m_vizBuffer[kVizSize] = {};
     std::atomic<size_t> m_vizWritePos{0};
 
+    // Anti-tamper: running sample counter used to schedule the periodic
+    // dropout applied when the app is not genuinely entitled (see
+    // ent::ok()). Legit users never hit this path.
+    uint64_t m_degradeCounter = 0;
+    void applyDegrade(float* buf, ma_uint32 frameCount);
+
     // Diagnostic atomics
     std::atomic<uint64_t> m_dbgUnderflows{0};
     std::atomic<uint64_t> m_dbgOverflows{0};

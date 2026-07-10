@@ -2,7 +2,7 @@
 ; Compiled by package.ps1 (paths below are relative to this file).
 
 #define AppName "Antigravity Voice Engine"
-#define AppVersion "1.8.0"
+#define AppVersion "1.9.0"
 #define AppExe "voice-changer.exe"
 
 [Setup]
@@ -107,13 +107,29 @@ begin
   if (CurStep = ssPostInstall) and WizardIsTaskSelected('vbcable') then begin
     ZipPath := ExpandConstant('{tmp}\vbcable.zip');
     ExtractDir := ExpandConstant('{tmp}\vbcable');
-    DriverSetup := ExtractDir + '\VBCABLE_Setup_x64.exe';
 
     if FileExists(ZipPath) then begin
       Exec('powershell.exe',
            '-NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath ''' +
            ZipPath + ''' -DestinationPath ''' + ExtractDir + ''' -Force"',
            '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    end;
+
+    // Pick the setup that matches the OS: the driver pack ships both
+    // VBCABLE_Setup_x64.exe (64-bit Windows) and VBCABLE_Setup.exe (32-bit).
+    // Running the wrong one fails, so choose by architecture.
+    if IsWin64 then
+      DriverSetup := ExtractDir + '\VBCABLE_Setup_x64.exe'
+    else
+      DriverSetup := ExtractDir + '\VBCABLE_Setup.exe';
+
+    // Fall back to whichever exists if the expected one is missing (pack layout
+    // has changed before).
+    if not FileExists(DriverSetup) then begin
+      if FileExists(ExtractDir + '\VBCABLE_Setup_x64.exe') then
+        DriverSetup := ExtractDir + '\VBCABLE_Setup_x64.exe'
+      else if FileExists(ExtractDir + '\VBCABLE_Setup.exe') then
+        DriverSetup := ExtractDir + '\VBCABLE_Setup.exe';
     end;
 
     if FileExists(DriverSetup) then begin

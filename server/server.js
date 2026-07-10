@@ -43,6 +43,9 @@ const SUB_GRACE_MS = 35 * 24 * 3600 * 1000;
 // App update check: bump these env vars in Render when you release a new build.
 const LATEST_VERSION = process.env.LATEST_VERSION || "";
 const DOWNLOAD_URL = process.env.DOWNLOAD_URL || "";
+// Optional anti-tamper: set to the current build's self-hash (printed by
+// package.ps1) so the dashboard can flag binaries reporting a different hash.
+const EXPECTED_HASH = process.env.EXPECTED_HASH || "";
 
 // Device binding (anti key-sharing). Optional: if the Upstash vars are not
 // set, the server falls back to signature-only checks so it still runs.
@@ -685,10 +688,14 @@ function recordProfile(req, key, device) {
   // "uninstalled" flag (covers a reinstall on the same PC).
   const os = String(req.query.os || "").slice(0, 64);
   const ver = String(req.query.v || "").slice(0, 32);
+  const hash = String(req.query.h || "").slice(0, 32);
+  // Tamper flag: only meaningful once EXPECTED_HASH is set (per release) in
+  // Render. A reported hash that differs is a modified/patched binary.
+  const tampered = EXPECTED_HASH && hash && hash !== EXPECTED_HASH ? "1" : "0";
   Promise.all([
     redis(["SADD", "installs", device]),
     redis(["HSET", "install:" + device,
-      "key", key, "os", os, "version", ver,
+      "key", key, "os", os, "version", ver, "hash", hash, "tampered", tampered,
       "country", country.slice(0, 8), "lastSeen", now, "uninstalled", "0"]),
     redis(["HSETNX", "install:" + device, "firstSeen", now]),
   ]).catch((err) => console.error("install record failed:", err.message));
@@ -920,6 +927,7 @@ async function collectInstalls(limit = 200) {
       os: h.os || "", version: h.version || "", country: h.country || "",
       key: h.key || "", firstSeen: h.firstSeen || "", lastSeen: h.lastSeen || "",
       uninstalledAt: h.uninstalledAt || "", last,
+      tampered: h.tampered === "1",
     });
   }
   out.sort((a, b) => b.last - a.last);
@@ -1219,8 +1227,10 @@ app.get("/admin", async (req, res) => {
           const labels = { online: "● online", active: "installed", idle: "idle (7d+)", uninstalled: "uninstalled" };
           const live = installs.filter((i) => i.status !== "uninstalled").length;
           const gone = installs.filter((i) => i.status === "uninstalled").length;
+          const tamperedCount = installs.filter((i) => i.tampered).length;
           const rows = installs.map((i) => `<tr>
-            <td style="color:${colors[i.status]}">${labels[i.status]}</td>
+            <td style="color:${colors[i.status]}">${labels[i.status]}${
+              i.tampered ? ` <span style="color:#f47272" title="Reported hash differs from EXPECTED_HASH">⚠ modified</span>` : ""}</td>
             <td><code>${esc(i.device.slice(0, 12))}</code></td>
             <td>${esc(i.os)}</td>
             <td>${esc(i.version ? "v" + i.version : "")}</td>
@@ -1231,7 +1241,8 @@ app.get("/admin", async (req, res) => {
           </tr>`).join("");
           return `<p class="muted"><strong style="color:#f2f2f7">${installs.length}</strong> machine(s) ·
             <strong style="color:#5fd18a">${live}</strong> still installed ·
-            <strong style="color:#f47272">${gone}</strong> uninstalled ·
+            <strong style="color:#f47272">${gone}</strong> uninstalled${
+            tamperedCount ? ` · <strong style="color:#f47272">${tamperedCount}</strong> modified binary` : ""} ·
             each row is one PC (anonymous machine fingerprint)</p>
             <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.85rem">
             <tr style="text-align:left;color:#9a9aa5"><th>Status</th><th>Machine</th><th>OS</th><th>App</th><th>Country</th><th>Key</th><th>Last seen</th></tr>

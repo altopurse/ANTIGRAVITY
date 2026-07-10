@@ -121,7 +121,7 @@ target_link_libraries(voice-changer PRIVATE
 )
 
 # App version (sent to the license server for per-key analytics)
-target_compile_definitions(voice-changer PRIVATE APP_VERSION="1.8.0")
+target_compile_definitions(voice-changer PRIVATE APP_VERSION="1.9.0")
 
 # Windows-specific configurations
 if(WIN32)
@@ -134,6 +134,17 @@ if(WIN32)
         winhttp
         shell32
         advapi32
+    )
+
+    # CRITICAL: statically link the MinGW C/C++ runtime and threading library.
+    # Without this the exe depends on libstdc++-6.dll, libgcc_s_seh-1.dll and
+    # libwinpthread-1.dll, which exist only on a machine with MinGW installed -
+    # so it runs on the dev box but crashes with "DLL not found" on every
+    # user's PC. -static pulls all three into the exe, making it self-contained.
+    target_link_options(voice-changer PRIVATE
+        -static
+        -static-libgcc
+        -static-libstdc++
     )
 
     # Embed the application icon

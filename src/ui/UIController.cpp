@@ -1,6 +1,7 @@
 #include "UIController.h"
 #include "dsp/Effects.h"
 #include "dsp/DspPresets.h"
+#include "license/Entitlement.h"
 #include "imgui.h"
 #include <iostream>
 #include <algorithm>
@@ -126,6 +127,15 @@ void UIController::captureConfig(AppConfig& cfg) const {
 }
 
 void UIController::render() {
+    // Periodic anti-tamper check (updates the 'clean' half of the entitlement
+    // guard). Runs regardless of lock state, throttled to keep it cheap.
+    static float tamperAccum = 1.5f; // first check soon after launch
+    tamperAccum += ImGui::GetIO().DeltaTime;
+    if (tamperAccum >= 2.0f) {
+        tamperAccum = 0.0f;
+        ent::runTamperChecks();
+    }
+
     // Gate the whole app behind license activation
     if (m_license && !m_license->isUnlocked()) {
         drawActivationScreen();

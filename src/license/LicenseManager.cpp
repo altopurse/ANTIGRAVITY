@@ -1,4 +1,5 @@
 #include "LicenseManager.h"
+#include "Entitlement.h"
 
 #include <filesystem>
 #include <fstream>
@@ -32,7 +33,7 @@ static std::string httpGetBody(const std::wstring& path); // defined below
 #endif
 
 #ifndef APP_VERSION
-#define APP_VERSION "1.8.0"
+#define APP_VERSION "1.9.0"
 #endif
 
 // Short OS tag for the per-license usage profile, e.g. "Win11-26200".
@@ -63,6 +64,7 @@ void LicenseManager::init() {
     std::string saved = loadSavedKey();
     if (saved.empty()) {
         m_status.store(Status::NoKey);
+        ent::setLicensed(false);
         return;
     }
     m_hadSavedKey.store(true);
@@ -70,6 +72,9 @@ void LicenseManager::init() {
         std::lock_guard<std::mutex> lock(m_keyMutex);
         m_activeKey = saved; // known immediately so reset() works mid-check
     }
+    // Entitle during the initial re-check so a paying user who starts the
+    // engine immediately isn't degraded while the server call is in flight.
+    ent::setLicensed(true);
     verifyAsync(saved, /*saveOnSuccess=*/false);
 }
 
@@ -101,6 +106,7 @@ void LicenseManager::reset() {
     deleteSavedKey();
     m_hadSavedKey.store(false);
     m_status.store(Status::NoKey);
+    ent::setLicensed(false);
 
     // Free this device's slot on the server so the key can be activated on
     // another PC. Fire-and-forget: local reset must not depend on the network.
@@ -147,6 +153,10 @@ void LicenseManager::verifyAsync(std::string key, bool saveOnSuccess) {
             }
             m_hadSavedKey.store(true);
             m_status.store(Status::Valid);
+            // Genuine entitlement - the audio path's scattered guard. Set only
+            // here (and the offline-grace path in refreshEntitlement), NOT in
+            // the UI's isUnlocked(), so patching the UI gate isn't enough.
+            ent::setLicensed(true);
         } else if (result == 2) {
             // Real key, but this machine is over the device limit. Keep the
             // saved key (they may free up a slot) but lock the app. Remember
@@ -157,18 +167,24 @@ void LicenseManager::verifyAsync(std::string key, bool saveOnSuccess) {
             }
             m_hadSavedKey.store(false);
             m_status.store(Status::DeviceLimit);
+            ent::setLicensed(false);
         } else if (result == 3) {
             // Monthly subscription lapsed. Keep the saved key on disk (a
             // renewal payment revalidates it) but lock the app for now.
             m_hadSavedKey.store(false);
             m_status.store(Status::Expired);
+            ent::setLicensed(false);
         } else if (result == 0) {
             // Server explicitly rejected it: drop any saved copy and lock.
             deleteSavedKey();
             m_hadSavedKey.store(false);
             m_status.store(Status::Invalid);
+            ent::setLicensed(false);
         } else {
             m_status.store(Status::NetworkError);
+            // Offline grace: a previously-saved key keeps entitlement so
+            // paying users offline are never degraded.
+            ent::setLicensed(m_hadSavedKey.load());
         }
         m_busy.store(false);
     }).detach();
@@ -268,6 +284,37 @@ std::string LicenseManager::getLastKey() {
     return key;
 }
 
+// Self-integrity: FNV-1a hash of this executable's own bytes, computed once
+// and cached. Sent to the server so the owner can spot obviously-patched
+// binaries on the dashboard. Telemetry-grade (a smart cracker can replay the
+// original hash), but it catches lazy edits and costs nothing.
+static std::string selfHash() {
+    static std::string cached;
+    if (!cached.empty()) return cached;
+#ifdef _WIN32
+    char path[MAX_PATH] = {0};
+    if (GetModuleFileNameA(nullptr, path, MAX_PATH) == 0) { cached = "0"; return cached; }
+    std::ifstream f(path, std::ios::binary);
+    if (!f) { cached = "0"; return cached; }
+    uint64_t h = 1469598103934665603ULL;
+    char buf[65536];
+    while (f) {
+        f.read(buf, sizeof(buf));
+        std::streamsize n = f.gcount();
+        for (std::streamsize i = 0; i < n; ++i) {
+            h ^= static_cast<unsigned char>(buf[i]);
+            h *= 1099511628211ULL;
+        }
+    }
+    char out[17];
+    snprintf(out, sizeof(out), "%016llx", static_cast<unsigned long long>(h));
+    cached = out;
+#else
+    cached = "0";
+#endif
+    return cached;
+}
+
 // Pulls "field":"value" out of a flat JSON body (no JSON library needed)
 static std::string extractJsonString(const std::string& body, const std::string& field) {
     std::string needle = "\"" + field + "\":\"";
@@ -332,7 +379,7 @@ int LicenseManager::verifyOnline(const std::string& key) {
     std::string dev = deviceId();
     std::string os = osTag();
     std::string q = "/api/verify?key=" + key + "&device=" + dev +
-                    "&os=" + os + "&v=" + APP_VERSION;
+                    "&os=" + os + "&v=" + APP_VERSION + "&h=" + selfHash();
     std::wstring path(q.begin(), q.end());
 
     std::string body = httpGetBody(path);

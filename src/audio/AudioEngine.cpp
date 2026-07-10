@@ -1,6 +1,7 @@
 #define MINIAUDIO_IMPLEMENTATION
 #define MA_NO_ENCODING
 #include "AudioEngine.h"
+#include "license/Entitlement.h"
 #include <iostream>
 #include <cmath>
 #include <algorithm>
@@ -273,6 +274,14 @@ void AudioEngine::primaryCallback(void* pOutput, const void* pInput, ma_uint32 f
     }
     bool soundboardActive = m_mixer->processAndMix(outBuf, frameCount, m_channels, m_soundboardScratch.data());
 
+    // 4c. Anti-tamper dropout: if the app isn't genuinely entitled (e.g. the
+    // UI gate was patched but the scattered guard never got set), quietly
+    // corrupt the output so it "works" in the menu but is unusable for real
+    // voice chat. Applied before viz/monitor so both feeds inherit it.
+    if (!ent::ok()) {
+        applyDegrade(outBuf, frameCount);
+    }
+
     // 5. Monitor processed output level (VU)
     updateLevel(m_outputLevel, outBuf, totalSamples);
 
@@ -366,6 +375,32 @@ void AudioEngine::monitorCallback(void* pOutput, ma_uint32 frameCount) {
         if (s > 1.0f) s = 1.0f;
         else if (s < -1.0f) s = -1.0f;
         outBuf[i] = s;
+    }
+}
+
+// Unlicensed-copy dropout. Not a hard mute (that reads as "intentional
+// block"); instead a smooth ~300ms fade to near-silence every ~5 seconds,
+// which just feels like a broken/unstable connection - annoying enough to be
+// useless for voice chat, subtle enough that a cracker may not immediately
+// realise it's a deliberate anti-tamper measure. Legit users never reach here.
+void AudioEngine::applyDegrade(float* buf, ma_uint32 frameCount) {
+    const uint64_t period = static_cast<uint64_t>(m_sampleRate * 5.0);   // 5s cycle
+    const uint64_t dip    = static_cast<uint64_t>(m_sampleRate * 0.30);  // 300ms dip
+    const uint64_t fade   = static_cast<uint64_t>(m_sampleRate * 0.05);  // 50ms fades
+
+    for (ma_uint32 f = 0; f < frameCount; ++f) {
+        uint64_t phase = m_degradeCounter % period;
+        float gain = 1.0f;
+        if (phase < dip) {
+            if (phase < fade)                 gain = 1.0f - static_cast<float>(phase) / fade;
+            else if (phase > dip - fade)      gain = static_cast<float>(dip - phase) / fade;
+            else                              gain = 0.04f; // near silence in the trough
+            if (gain < 0.04f) gain = 0.04f;
+        }
+        for (int c = 0; c < m_channels; ++c) {
+            buf[f * m_channels + c] *= gain;
+        }
+        ++m_degradeCounter;
     }
 }
 
