@@ -54,6 +54,9 @@ private:
     // License activation input buffer
     char m_licenseKeyInput[128] = {0};
 
+    // GDPR/Terms consent (mirrors AppConfig::termsAccepted; required to activate)
+    bool m_termsAccepted = false;
+
     // First-launch setup wizard (shown until finished or skipped once)
     bool m_showWizard = false;
 

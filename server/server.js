@@ -35,7 +35,13 @@ const PRODUCT = "Antigravity Voice Engine license";
 // expires unless Mollie keeps reporting successful recurring payments.
 const PLANS = {
   life:    { amount: { currency: "GBP", value: "10.00" }, label: "Lifetime" },
-  monthly: { amount: { currency: "GBP", value: "2.00" },  label: "Monthly" },
+  // Intro subscription: £0.80 charged now (first month), then £3.00/month
+  // recurring starting a month later.
+  monthly: {
+    amount:     { currency: "GBP", value: "0.80" }, // first payment (this month)
+    recurring:  { currency: "GBP", value: "3.00" }, // every month after
+    label: "Monthly",
+  },
 };
 // Each paid month grants 35 days so retries/bank delays never lock a payer out.
 const SUB_GRACE_MS = 35 * 24 * 3600 * 1000;
@@ -322,9 +328,10 @@ app.get("/", async (req, res) => {
   trackView(req, res, "home");
   const monthlyBtn = bindingEnabled
     ? `<div class="card">
-         <div>Monthly</div>
-         <div class="price">£2<span>/month</span></div>
-         <a class="btn ghost" href="/buy?plan=monthly">Subscribe</a>
+         <div>Monthly <span style="color:#5fd18a;font-size:0.8rem">· try it cheap</span></div>
+         <div class="price">£0.80<span> first month</span></div>
+         <div class="muted" style="font-size:0.85rem;margin:-8px 0 12px">then £3/month · cancel anytime</div>
+         <a class="btn ghost" href="/buy?plan=monthly">Start for £0.80</a>
        </div>`
     : "";
 
@@ -348,7 +355,7 @@ app.get("/", async (req, res) => {
          live in Discord, games, Zoom and OBS. No subscription trap.</p>
          <a class="btn big" href="/download">Download for Windows - Free</a>
          ${proof}
-         <p class="muted" style="margin-top:12px">Free to download - a one-time £10 key (or £2/month) unlocks it.
+         <p class="muted" style="margin-top:12px">Free to download - a one-time £10 key (or £0.80 first month, then £3/mo) unlocks it.
          Works with Discord, Zoom, OBS, and any game.</p>
        </div>
 
@@ -541,7 +548,7 @@ async function activateSubscription(payment) {
   let subId = null;
   try {
     const sub = await mollie("POST", `/customers/${custId}/subscriptions`, {
-      amount: PLANS.monthly.amount,
+      amount: PLANS.monthly.recurring, // £3/month ongoing
       interval: "1 month",
       startDate,
       description: `${PRODUCT} (monthly)`,
@@ -561,6 +568,9 @@ async function activateSubscription(payment) {
     if (!subId) throw err;
   }
 
+  // subscription itself charges the recurring (£3) amount monthly.
+  // (The £0.80 first payment was the checkout above.)
+  //   -- amount handled in the mollie() call below --
   await redis(["HSET", "sub:" + key,
     "plan", "monthly",
     "customerId", custId,
@@ -734,6 +744,12 @@ app.get("/api/verify", async (req, res) => {
   }
 
   try {
+    // Owner revocation kills a key everywhere (stolen/shared/refunded). Checked
+    // before anything else so a revoked key can never re-register or unlock.
+    if ((await redis(["SISMEMBER", "keys:revoked", key])) === 1) {
+      return res.json({ valid: false, reason: "revoked" });
+    }
+
     // Time-boxed keys (monthly subscription or an admin-issued trial): reject
     // once the paid-until window has lapsed.
     const sub = flattenHash(await redis(["HGETALL", "sub:" + key]));
@@ -944,14 +960,17 @@ async function collectKeyData() {
     const sub = flattenHash(await redis(["HGETALL", "sub:" + k]));
     const paidUntil = sub.paidUntil !== undefined ? Number(sub.paidUntil) : null;
     const plan = sub.plan || (paidUntil === null ? "lifetime" : "monthly");
+    const revoked = (await redis(["SISMEMBER", "keys:revoked", k])) === 1;
     const status =
-      paidUntil === null ? "active"
+      revoked ? "revoked"
+      : paidUntil === null ? "active"
       : Date.now() > paidUntil ? "expired" : "active";
 
     out.push({
       key: k,
       plan,
       status,
+      revoked,
       paidUntil: paidUntil === null ? "" : new Date(paidUntil).toISOString(),
       activeDevices: await redis(["SCARD", "lic:" + k]),
       ...p,
@@ -1002,6 +1021,59 @@ app.get("/api/admin/clear", async (req, res) => {
     await redis(["DEL", "lic:" + key]);
     if (req.query.back) return res.redirect("/admin"); // session cookie carries auth
     res.json({ cleared: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "redis error" });
+  }
+});
+
+// Revoke a key (owner only): kills it everywhere and frees its device slots.
+// Works on any plan - lifetime, monthly or trial. Use for stolen/shared keys.
+app.get("/api/admin/revoke", async (req, res) => {
+  if (!adminAuthorized(req)) return res.status(403).json({ error: "forbidden" });
+  const key = String(req.query.key || "");
+  if (!signatureValid(key)) return res.status(400).json({ error: "invalid key" });
+  try {
+    await redis(["SADD", "keys:revoked", key]);
+    await redis(["DEL", "lic:" + key]); // boot every device immediately
+    if (req.query.back) return res.redirect("/admin");
+    res.json({ revoked: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "redis error" });
+  }
+});
+
+// Un-revoke (owner only): re-enable a key you revoked by mistake.
+app.get("/api/admin/unrevoke", async (req, res) => {
+  if (!adminAuthorized(req)) return res.status(403).json({ error: "forbidden" });
+  const key = String(req.query.key || "");
+  if (!signatureValid(key)) return res.status(400).json({ error: "invalid key" });
+  try {
+    await redis(["SREM", "keys:revoked", key]);
+    if (req.query.back) return res.redirect("/admin");
+    res.json({ unrevoked: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "redis error" });
+  }
+});
+
+// Delete a key from the dashboard entirely (owner only): revokes it (so it
+// can never work again even if it re-verifies) AND removes its records from
+// every list, so it disappears from the dashboard.
+app.get("/api/admin/delete", async (req, res) => {
+  if (!adminAuthorized(req)) return res.status(403).json({ error: "forbidden" });
+  const key = String(req.query.key || "");
+  if (!signatureValid(key)) return res.status(400).json({ error: "invalid key" });
+  try {
+    await redis(["SADD", "keys:revoked", key]); // stays dead even if it pings again
+    await redis(["SREM", "keys:used", key]);
+    await redis(["DEL", "lic:" + key]);
+    await redis(["DEL", "sub:" + key]);
+    await redis(["DEL", "profile:" + key]);
+    if (req.query.back) return res.redirect("/admin");
+    res.json({ deleted: true });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "redis error" });
@@ -1111,9 +1183,10 @@ app.get("/admin", async (req, res) => {
          </div>`
       : "";
 
+    const enc = (k) => encodeURIComponent(k);
     const rows = data.keys
       .sort((a, b) => String(b.lastSeen || "").localeCompare(String(a.lastSeen || "")))
-      .map((k) => `<tr>
+      .map((k) => `<tr${k.revoked ? ' style="opacity:0.55"' : ""}>
         <td><code>${esc(k.key)}</code></td>
         <td style="color:${PLAN_COLORS[k.plan] || "#f2f2f7"}">${esc(k.plan)}</td>
         <td style="color:${k.status === "active" ? "#5fd18a" : "#f47272"}">${esc(k.status)}${
@@ -1125,8 +1198,17 @@ app.get("/admin", async (req, res) => {
         <td>${esc(k.country || "")}</td>
         <td>${k.source === "admin" ? `Given away${k.note ? ` <span class="muted">(${esc(k.note)})</span>` : ""}` : "Purchased"}</td>
         <td>${esc(k.checks || 0)}</td>
-        <td><a href="/api/admin/clear?key=${encodeURIComponent(k.key)}&back=1"
-               onclick="return confirm('Free all device slots for this key?')">clear devices</a></td>
+        <td style="white-space:nowrap">
+          <a href="/api/admin/clear?key=${enc(k.key)}&back=1"
+             onclick="return confirm('Free this key\\'s device slots? The owner can then re-activate on a new PC.')">clear devices</a>
+          ${k.revoked
+            ? ` · <a style="color:#5fd18a" href="/api/admin/unrevoke?key=${enc(k.key)}&back=1"
+                   onclick="return confirm('Re-enable this key?')">un-revoke</a>`
+            : ` · <a href="/api/admin/revoke?key=${enc(k.key)}&back=1"
+                   onclick="return confirm('REVOKE this key? It stops working everywhere immediately (use for stolen/shared keys).')">revoke</a>`}
+          · <a href="/api/admin/delete?key=${enc(k.key)}&back=1"
+               onclick="return confirm('DELETE this key permanently? It is revoked and removed from the list. This cannot be undone.')">delete</a>
+        </td>
       </tr>`).join("");
     res.send(page("License dashboard", `
       <h1>License dashboard</h1>

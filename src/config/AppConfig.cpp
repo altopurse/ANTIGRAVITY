@@ -50,6 +50,7 @@ bool AppConfig::save() const {
     j << "  \"duckingAmount\": "   << duckingAmount << ",\n";
     j << "  \"stopAllHotkey\": "   << stopAllHotkey << ",\n";
     j << "  \"setupDone\": "       << (setupDone ? "true" : "false") << ",\n";
+    j << "  \"termsAccepted\": "   << (termsAccepted ? "true" : "false") << ",\n";
     j << "  \"dspState\": \""      << jsonEscape(dspState) << "\",\n";
     j << "  \"clips\": [\n";
     for (size_t i = 0; i < clips.size(); ++i) {
@@ -143,6 +144,7 @@ bool AppConfig::load() {
     duckingAmount  = toFloat(extractValue(json, "duckingAmount", 0, scalarEnd), duckingAmount);
     stopAllHotkey  = toInt(extractValue(json, "stopAllHotkey", 0, scalarEnd), stopAllHotkey);
     setupDone      = toBool(extractValue(json, "setupDone", 0, scalarEnd), setupDone);
+    termsAccepted  = toBool(extractValue(json, "termsAccepted", 0, scalarEnd), termsAccepted);
     dspState       = extractValue(json, "dspState", 0, scalarEnd);
 
     clips.clear();

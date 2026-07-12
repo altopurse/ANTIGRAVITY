@@ -278,15 +278,39 @@ void UIController::drawActivationScreen() {
     ImGui::InputTextWithHint("##licensekey", "ANTI-XXXXXXXXXX-XXXXXXXXXXXXXXXXXXXX",
                              m_licenseKeyInput, sizeof(m_licenseKeyInput));
 
+    // GDPR / Terms consent - required before activation. Once accepted it's
+    // remembered in the config so returning users aren't nagged every launch.
+    if (m_config && m_config->termsAccepted) m_termsAccepted = true;
+    ImGui::SetCursorPosX(startX);
+    ImGui::Checkbox("##terms", &m_termsAccepted);
+    ImGui::SameLine(0.0f, 6.0f);
+    ImGui::TextUnformatted("I accept the");
+    ImGui::SameLine(0.0f, 4.0f);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.28f, 0.69f, 0.98f, 1.0f));
+    if (ImGui::SmallButton("Terms & Privacy")) {
+#ifdef _WIN32
+        ShellExecuteA(nullptr, "open", "https://antigravity-license.onrender.com/legal",
+                      nullptr, nullptr, SW_SHOWNORMAL);
+#endif
+    }
+    ImGui::PopStyleColor();
+    ImGui::SameLine(0.0f, 4.0f);
+    ImGui::TextDisabled("(GDPR compliant)");
+    if (m_config) m_config->termsAccepted = m_termsAccepted;
+
     LicenseManager::Status status = m_license->getStatus();
     bool checking = (status == LicenseManager::Status::Checking);
 
     ImGui::SetCursorPosX(startX);
-    ImGui::BeginDisabled(checking);
+    ImGui::BeginDisabled(checking || !m_termsAccepted);
     if (ImGui::Button("ACTIVATE", ImVec2(colWidth, 36))) {
         m_license->activate(m_licenseKeyInput);
     }
     ImGui::EndDisabled();
+    if (!m_termsAccepted) {
+        ImGui::SetCursorPosX(startX);
+        ImGui::TextDisabled("Tick the box above to enable activation.");
+    }
 
     ImGui::Spacing();
     ImGui::SetCursorPosX(startX);
@@ -303,11 +327,7 @@ void UIController::drawActivationScreen() {
             ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
                                "This key is already active on the maximum number of devices.");
             ImGui::SetCursorPosX(startX);
-            if (ImGui::Button("Unbind All Devices & Retry", ImVec2(colWidth, 30))) {
-                m_license->unbindAllDevices();
-            }
-            ImGui::SetCursorPosX(startX);
-            ImGui::TextDisabled("Frees the key from every old PC, then activates it here.");
+            ImGui::TextDisabled("Changed PCs? Contact support with your key to free a slot.");
             break;
         case LicenseManager::Status::Expired:
             ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.2f, 1.0f),
@@ -693,23 +713,17 @@ void UIController::drawSettingsPanel() {
         ImGui::TextDisabled("Plan: unknown");
     }
 
-    if (ImGui::Button("Unbind All Devices", ImVec2(-1, 0))) {
-        m_license->unbindAllDevices();
-    }
-    ImGui::SetItemTooltip("Frees this key's device slots on ALL PCs at once, then\n"
-                          "re-registers this PC automatically. Use after reinstalling\n"
-                          "Windows or replacing machines when slots are used up.");
-
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.45f, 0.16f, 0.16f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.65f, 0.20f, 0.20f, 1.0f));
-    if (ImGui::Button("Reset License Key", ImVec2(-1, 0))) {
+    if (ImGui::Button("Sign out on this PC", ImVec2(-1, 0))) {
         m_audioEngine->stop();
         m_license->reset();
     }
     ImGui::PopStyleColor(2);
-    ImGui::SetItemTooltip("Deactivates this PC and clears the saved key.\n"
-                          "Frees the device slot so the key can be used on another PC.\n"
-                          "You'll need to enter a license key again to use the app.");
+    ImGui::SetItemTooltip("Clears the saved key on THIS PC so you can enter a different one.\n"
+                          "Your device slot stays reserved - to move the key to a new PC,\n"
+                          "contact support to free a slot (this stops stolen keys being\n"
+                          "unbound by whoever took them).");
 
     // Refer a friend
     ImGui::Spacing();

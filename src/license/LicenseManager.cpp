@@ -33,7 +33,7 @@ static std::string httpGetBody(const std::wstring& path); // defined below
 #endif
 
 #ifndef APP_VERSION
-#define APP_VERSION "1.9.0"
+#define APP_VERSION "2.0.0"
 #endif
 
 // Short OS tag for the per-license usage profile, e.g. "Win11-26200".
@@ -108,11 +108,11 @@ void LicenseManager::reset() {
     m_status.store(Status::NoKey);
     ent::setLicensed(false);
 
-    // Free this device's slot on the server so the key can be activated on
-    // another PC. Fire-and-forget: local reset must not depend on the network.
-    if (!key.empty()) {
-        std::thread([key]() { releaseOnline(key); }).detach();
-    }
+    // NOTE: intentionally does NOT free the server-side device slot. Only the
+    // owner can clear devices (from the dashboard), so a person who obtained a
+    // shared/stolen key can't self-serve unbind the real owner's machines.
+    // A genuine customer who changed PCs contacts support to free their slot.
+    (void)key;
 }
 
 void LicenseManager::unbindAllDevices() {
@@ -392,6 +392,7 @@ int LicenseManager::verifyOnline(const std::string& key) {
     }
     if (body.find("device_limit") != std::string::npos)         return 2;
     if (body.find("expired") != std::string::npos)              return 3;
+    // "revoked" is treated as a hard invalid (owner killed the key): 0.
     if (body.find("\"valid\":false") != std::string::npos)      return 0;
     return -1; // empty/garbage (proxy error page, etc.) = network error
 #else

@@ -47,6 +47,9 @@ public:
     // First-launch setup wizard: shown until completed or skipped once
     bool setupDone = false;
 
+    // GDPR / Terms of Service acceptance (recorded at activation)
+    bool termsAccepted = false;
+
     // %APPDATA%/Antigravity/config.json (folder created on demand)
     static std::string configFilePath();
 
