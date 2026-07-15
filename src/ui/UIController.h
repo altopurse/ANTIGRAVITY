@@ -42,6 +42,11 @@ private:
     // Start the engine with the currently selected devices; updates status
     void startEngine();
 
+    // Write the current state to config.json right away (used after hotkey
+    // binds and clip add/remove so they survive even a crash/kill - config
+    // otherwise only saves on clean exit)
+    void persistConfig();
+
     // Device selection state index
     int m_selectedInputIdx = 0;
     int m_selectedOutputIdx = 0;

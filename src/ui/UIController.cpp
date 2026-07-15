@@ -158,6 +158,12 @@ void UIController::captureConfig(AppConfig& cfg) const {
     cfg.dspState = DspPresets::serialize(*m_dspGraph);
 }
 
+void UIController::persistConfig() {
+    if (!m_config) return;
+    captureConfig(*m_config);
+    m_config->save();
+}
+
 void UIController::startEngine() {
     const auto& inputs = m_audioEngine->getInputDevices();
     const auto& outputs = m_audioEngine->getOutputDevices();
@@ -224,6 +230,7 @@ void UIController::render() {
                     m_soundboard->setHotkey(m_bindingClip, k);
                     m_bindingClip = nullptr;
                 }
+                persistConfig(); // bindings survive a crash/kill
                 break;
             }
         }
@@ -1049,6 +1056,7 @@ void UIController::drawSoundboardPanel() {
             // Copies the file into the app's "sounds" folder and loads it
             // from there, so the clip survives if the original moves.
             m_soundboard->importSound(path);
+            persistConfig();
         }
     }
     if (ImGui::IsItemHovered()) {
@@ -1088,10 +1096,12 @@ void UIController::drawSoundboardPanel() {
     if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
         m_soundboard->clearStopAllHotkey();
         m_bindingStopAll = false;
+        persistConfig();
     }
 
     ImGui::PushFont(theme::FontSmall);
-    ImGui::TextColored(theme::TextDim, "Tip: keys 1-9 play the first nine clips while the app is focused.");
+    ImGui::TextColored(theme::TextDim, "Tip: click a clip's Hotkey button to bind a global key - bindings are saved automatically\n"
+                                       "and work while gaming. Keys 1-9 also play the first nine clips while the app is focused.");
     ImGui::PopFont();
     ImGui::Spacing();
 
@@ -1170,15 +1180,18 @@ void UIController::drawSoundboardPanel() {
         if (ImGui::BeginPopupContextWindow()) {
             if (ImGui::MenuItem("Clear Hotkey")) {
                 m_soundboard->clearHotkey(clip);
+                persistConfig();
             }
             ImGui::Separator();
             if (ImGui::MenuItem("Remove from Board")) {
                 m_soundboard->stopClip(clip);
                 m_soundboard->removeSound(clip, /*deleteFile=*/false);
+                persistConfig();
             }
             if (ImGui::MenuItem("Remove & Delete File")) {
                 m_soundboard->stopClip(clip);
                 m_soundboard->removeSound(clip, /*deleteFile=*/true);
+                persistConfig();
             }
             ImGui::EndPopup();
         }

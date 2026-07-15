@@ -121,7 +121,7 @@ target_link_libraries(voice-changer PRIVATE
 )
 
 # App version (sent to the license server for per-key analytics)
-target_compile_definitions(voice-changer PRIVATE APP_VERSION="2.1.0")
+target_compile_definitions(voice-changer PRIVATE APP_VERSION="2.1.1")
 
 # Windows-specific configurations
 if(WIN32)
