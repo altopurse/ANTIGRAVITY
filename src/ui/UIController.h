@@ -7,6 +7,7 @@
 #include "ads/AdBanner.h"
 #include <memory>
 #include <string>
+#include <set>
 
 class UIController {
 public:
@@ -38,6 +39,9 @@ private:
     // Restore saved device selections (by name) once devices are known
     void applyConfigDevices();
 
+    // Start the engine with the currently selected devices; updates status
+    void startEngine();
+
     // Device selection state index
     int m_selectedInputIdx = 0;
     int m_selectedOutputIdx = 0;
@@ -65,6 +69,9 @@ private:
     char m_presetNameInput[64] = {0};
     std::string m_presetStatus;
 
+    // Collapsed DSP node cards (keyed by effect name; default = expanded)
+    std::set<std::string> m_collapsedNodes;
+
     // "Copied!" feedback timer for the share button
     float m_shareCopiedTimer = 0.0f;
 
@@ -75,13 +82,11 @@ private:
     // Helpers to draw specific sections
     void drawActivationScreen();
     void drawSetupWizard();
+    void drawTopBar();
     void drawSettingsPanel();
     void drawVUMeters();
     void drawDSPGraphPanel();
     void drawSoundboardPanel();
-    
-    // Style configuration helper
-    void applyDarkModernTheme();
 
     // Open file dialog wrapper (Windows native)
     std::string openFileDialog();

@@ -1,4 +1,6 @@
 #include "UIController.h"
+#include "Theme.h"
+#include "Widgets.h"
 #include "dsp/Effects.h"
 #include "dsp/DspPresets.h"
 #include "license/Entitlement.h"
@@ -16,6 +18,8 @@
 #ifndef APP_VERSION
 #define APP_VERSION "dev"
 #endif
+
+using theme::S;
 
 namespace {
 
@@ -47,6 +51,35 @@ void fft(float* re, float* im, int n) {
     }
 }
 
+// Full-width combo with a small dim label above it.
+// Returns the (possibly changed) selected index.
+int labeledDeviceCombo(const char* label, const char* id,
+                       const std::vector<AudioDeviceRef>& devices,
+                       int selectedIdx, const char* emptyText) {
+    ImGui::PushFont(theme::FontSmall);
+    ImGui::TextColored(theme::TextDim, "%s", label);
+    ImGui::PopFont();
+    std::string preview = devices.empty() ? emptyText :
+        (selectedIdx >= 0 && selectedIdx < static_cast<int>(devices.size())
+             ? devices[selectedIdx].name : "Select");
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::BeginCombo(id, preview.c_str())) {
+        for (int i = 0; i < static_cast<int>(devices.size()); ++i) {
+            // PushID: devices can share identical (truncated) names, which
+            // would otherwise collide ImGui IDs and break selection.
+            ImGui::PushID(i);
+            const bool isSelected = (selectedIdx == i);
+            if (ImGui::Selectable(devices[i].name.c_str(), isSelected)) {
+                selectedIdx = i;
+            }
+            if (isSelected) ImGui::SetItemDefaultFocus();
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+    return selectedIdx;
+}
+
 } // namespace
 
 UIController::UIController(
@@ -58,7 +91,6 @@ UIController::UIController(
     std::shared_ptr<AdBanner> adBanner
 ) : m_audioEngine(audioEngine), m_dspGraph(dspGraph), m_soundboard(soundboard),
     m_license(license), m_config(config), m_adBanner(adBanner) {
-    applyDarkModernTheme();
     applyConfigDevices();
 
     // First launch (or wizard never finished): walk through device setup
@@ -126,6 +158,22 @@ void UIController::captureConfig(AppConfig& cfg) const {
     cfg.dspState = DspPresets::serialize(*m_dspGraph);
 }
 
+void UIController::startEngine() {
+    const auto& inputs = m_audioEngine->getInputDevices();
+    const auto& outputs = m_audioEngine->getOutputDevices();
+    const ma_device_id* pInId = (!inputs.empty() && m_selectedInputIdx < static_cast<int>(inputs.size())) ? &inputs[m_selectedInputIdx].id : nullptr;
+    const ma_device_id* pOutId = (!outputs.empty() && m_selectedOutputIdx < static_cast<int>(outputs.size())) ? &outputs[m_selectedOutputIdx].id : nullptr;
+    const ma_device_id* pMonId = (!outputs.empty() && m_selectedMonitorIdx < static_cast<int>(outputs.size())) ? &outputs[m_selectedMonitorIdx].id : nullptr;
+
+    if (m_audioEngine->start(pInId, pOutId, pMonId)) {
+        m_statusMessage = "Running (Sample Rate: " + std::to_string(static_cast<int>(m_audioEngine->getSampleRate())) + "Hz)";
+        m_isStatusError = false;
+    } else {
+        m_statusMessage = "Failed to start engine. Check device configuration.";
+        m_isStatusError = true;
+    }
+}
+
 void UIController::render() {
     // Periodic anti-tamper check (updates the 'clean' half of the entitlement
     // guard). Runs regardless of lock state, throttled to keep it cheap.
@@ -182,63 +230,106 @@ void UIController::render() {
 #endif
     }
 
-    // Set up main window layout
+    // Fullscreen host window
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->WorkPos);
     ImGui::SetNextWindowSize(viewport->WorkSize);
-    
-    ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings;
-    
+    ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                   ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings;
     ImGui::Begin("VoiceChangerMainWindow", nullptr, windowFlags);
 
-    // Header Title
-    ImGui::TextColored(ImVec4(0.22f, 0.74f, 0.97f, 1.0f), "ANTIGRAVITY VOICE ENGINE");
-    ImGui::TextDisabled("Desktop-Only Ultra-Low-Latency Voice Changer & Soundboard   -   v" APP_VERSION);
+    drawTopBar();
 
-    // Update banner (populated by the background version check)
-    if (m_license && m_license->isUpdateAvailable()) {
-        ImGui::SameLine(ImGui::GetWindowWidth() - 260);
-        std::string label = "Update v" + m_license->getUpdateVersion() + " available - download";
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.50f, 0.25f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.65f, 0.32f, 1.0f));
-        if (ImGui::Button(label.c_str())) {
+    // Three resizable panes: Devices+Levels | Effect chain | Soundboard
+    ImGuiTableFlags tableFlags = ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV;
+    if (ImGui::BeginTable("##layout", 3, tableFlags)) {
+        ImGui::TableSetupColumn("left",   ImGuiTableColumnFlags_WidthStretch, 0.29f);
+        ImGui::TableSetupColumn("middle", ImGuiTableColumnFlags_WidthStretch, 0.37f);
+        ImGui::TableSetupColumn("right",  ImGuiTableColumnFlags_WidthStretch, 0.34f);
+        ImGui::TableNextRow();
+
+        ImGui::TableSetColumnIndex(0);
+        drawSettingsPanel();
+        ImGui::Spacing();
+        drawVUMeters();
+
+        ImGui::TableSetColumnIndex(1);
+        drawDSPGraphPanel();
+
+        ImGui::TableSetColumnIndex(2);
+        drawSoundboardPanel();
+
+        ImGui::EndTable();
+    }
+
+    ImGui::End();
+}
+
+void UIController::drawTopBar() {
+    float barTop = ImGui::GetCursorPosY();
+
+    // Left: brand block
+    ImGui::PushFont(theme::FontHeading);
+    ImGui::TextColored(theme::Accent, "ANTIGRAVITY");
+    ImGui::SameLine(0.0f, S(8.0f));
+    ImGui::TextUnformatted("VOICE ENGINE");
+    ImGui::PopFont();
+    ImGui::PushFont(theme::FontSmall);
+    ImGui::TextColored(theme::TextDim, "Ultra-low-latency voice changer & soundboard  -  v" APP_VERSION);
+    ImGui::PopFont();
+    float afterBrandY = ImGui::GetCursorPosY();
+
+    // Right cluster, absolutely positioned on the bar: [update?] [pill] [start/stop]
+    bool active = m_audioEngine->isActive();
+    bool hasUpdate = m_license && m_license->isUpdateAvailable();
+
+    float btnW = S(190.0f);
+    float btnH = S(38.0f);
+    std::string pillText = active
+        ? "Running @ " + std::to_string(static_cast<int>(m_audioEngine->getSampleRate())) + " Hz"
+        : "Engine stopped";
+    ImGui::PushFont(theme::FontSmall);
+    float pillW = ImGui::CalcTextSize(pillText.c_str()).x + S(38.0f);
+    float pillH = ImGui::GetFrameHeight();
+    ImGui::PopFont();
+
+    float spacing = ImGui::GetStyle().ItemSpacing.x;
+    float right = ImGui::GetWindowContentRegionMax().x;
+    float centerY = barTop + S(26.0f);
+
+    float x = right - btnW;
+    ImGui::SetCursorPos(ImVec2(x, centerY - btnH * 0.5f));
+    if (active) {
+        if (widgets::ColoredButton("STOP ENGINE", ImVec2(btnW, btnH), theme::RedLo)) {
+            m_audioEngine->stop();
+            m_statusMessage = "Engine stopped.";
+            m_isStatusError = false;
+        }
+    } else {
+        if (widgets::ColoredButton("START ENGINE", ImVec2(btnW, btnH), theme::GreenLo)) {
+            startEngine();
+        }
+    }
+
+    x -= spacing + pillW;
+    ImGui::SetCursorPos(ImVec2(x, centerY - pillH * 0.5f));
+    widgets::StatusPill(pillText.c_str(), active ? theme::Green : theme::TextDim);
+
+    if (hasUpdate) {
+        std::string updateLabel = "Update v" + m_license->getUpdateVersion() + " available";
+        float updateW = ImGui::CalcTextSize(updateLabel.c_str()).x + ImGui::GetStyle().FramePadding.x * 2;
+        x -= spacing + updateW;
+        ImGui::SetCursorPos(ImVec2(x, centerY - ImGui::GetFrameHeight() * 0.5f));
+        if (widgets::ColoredButton(updateLabel.c_str(), ImVec2(0, 0), theme::GreenLo)) {
             m_license->openUpdatePage();
         }
-        ImGui::PopStyleColor(2);
+        ImGui::SetItemTooltip("A newer version is ready - opens the download page.");
     }
 
+    ImGui::SetCursorPosY(std::max(afterBrandY, centerY + btnH * 0.5f));
+    ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
-
-    // Main Columns layout: Left = Controls & VU meters, Middle = DSP Graph, Right = Soundboard
-    ImGui::Columns(3, "MainColumns", true);
-    
-    // Set column widths
-    static bool setWidths = true;
-    if (setWidths) {
-        ImGui::SetColumnWidth(0, viewport->WorkSize.x * 0.28f);
-        ImGui::SetColumnWidth(1, viewport->WorkSize.x * 0.38f);
-        ImGui::SetColumnWidth(2, viewport->WorkSize.x * 0.34f);
-        setWidths = false;
-    }
-
-    // --- Column 1: Settings, Device Selection, VU Meters ---
-    drawSettingsPanel();
-    ImGui::Spacing();
-    drawVUMeters();
-    
-    ImGui::NextColumn();
-
-    // --- Column 2: DSP Graph ---
-    drawDSPGraphPanel();
-
-    ImGui::NextColumn();
-
-    // --- Column 3: Soundboard ---
-    drawSoundboardPanel();
-
-    ImGui::Columns(1);
-    ImGui::End();
 }
 
 void UIController::drawActivationScreen() {
@@ -249,44 +340,48 @@ void UIController::drawActivationScreen() {
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                  ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
 
-    // Center a fixed-width column
-    float colWidth = 460.0f;
-    float startX = (viewport->WorkSize.x - colWidth) * 0.5f;
+    // Centered activation card
+    float cardW = S(520.0f);
+    float startX = (viewport->WorkSize.x - cardW) * 0.5f;
     if (startX < 0) startX = 0;
-    ImGui::SetCursorPosY(viewport->WorkSize.y * 0.22f);
+    ImGui::SetCursorPosY(viewport->WorkSize.y * 0.12f);
+    ImGui::SetCursorPosX(startX);
 
-    ImGui::SetCursorPosX(startX);
-    ImGui::TextColored(ImVec4(0.22f, 0.74f, 0.97f, 1.0f), "ANTIGRAVITY VOICE ENGINE");
-    ImGui::SetCursorPosX(startX);
-    ImGui::TextDisabled("License required: 10 GBP lifetime, or 2 GBP/month");
-    ImGui::SetCursorPosX(startX);
-    ImGui::Separator();
-    ImGui::Spacing();
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(26.0f), S(24.0f)));
+    ImGui::BeginChild("ActivationCard", ImVec2(cardW, 0),
+                      ImGuiChildFlags_Border | ImGuiChildFlags_AutoResizeY,
+                      ImGuiWindowFlags_AlwaysUseWindowPadding);
 
-    ImGui::SetCursorPosX(startX);
-    if (ImGui::Button("Buy License", ImVec2(colWidth, 36))) {
+    ImGui::PushFont(theme::FontHeading);
+    ImGui::TextColored(theme::Accent, "ANTIGRAVITY");
+    ImGui::SameLine(0.0f, S(8.0f));
+    ImGui::TextUnformatted("VOICE ENGINE");
+    ImGui::PopFont();
+    ImGui::TextColored(theme::TextDim, "License required: 10 GBP lifetime, or 2 GBP/month");
+    widgets::Divider();
+
+    if (widgets::ColoredButton("Buy License", ImVec2(-FLT_MIN, S(38.0f)), theme::Accent)) {
         m_license->openPurchasePage();
     }
-    ImGui::SetCursorPosX(startX);
-    ImGui::TextDisabled("Opens the purchase page in your browser. After paying,");
-    ImGui::SetCursorPosX(startX);
-    ImGui::TextDisabled("copy the license key it shows and paste it below.");
+    ImGui::PushFont(theme::FontSmall);
+    ImGui::TextColored(theme::TextDim, "Opens the purchase page in your browser. After paying,");
+    ImGui::TextColored(theme::TextDim, "copy the license key it shows and paste it below.");
+    ImGui::PopFont();
     ImGui::Spacing();
 
-    ImGui::SetCursorPosX(startX);
-    ImGui::SetNextItemWidth(colWidth);
+    ImGui::SetNextItemWidth(-FLT_MIN);
     ImGui::InputTextWithHint("##licensekey", "ANTI-XXXXXXXXXX-XXXXXXXXXXXXXXXXXXXX",
                              m_licenseKeyInput, sizeof(m_licenseKeyInput));
 
     // GDPR / Terms consent - required before activation. Once accepted it's
     // remembered in the config so returning users aren't nagged every launch.
     if (m_config && m_config->termsAccepted) m_termsAccepted = true;
-    ImGui::SetCursorPosX(startX);
     ImGui::Checkbox("##terms", &m_termsAccepted);
-    ImGui::SameLine(0.0f, 6.0f);
+    ImGui::SameLine(0.0f, S(6.0f));
+    ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("I accept the");
-    ImGui::SameLine(0.0f, 4.0f);
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.28f, 0.69f, 0.98f, 1.0f));
+    ImGui::SameLine(0.0f, S(4.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, theme::AccentHi);
     if (ImGui::SmallButton("Terms & Privacy")) {
 #ifdef _WIN32
         ShellExecuteA(nullptr, "open", "https://antigravity-license.onrender.com/legal",
@@ -294,51 +389,47 @@ void UIController::drawActivationScreen() {
 #endif
     }
     ImGui::PopStyleColor();
-    ImGui::SameLine(0.0f, 4.0f);
+    ImGui::SameLine(0.0f, S(4.0f));
     ImGui::TextDisabled("(GDPR compliant)");
     if (m_config) m_config->termsAccepted = m_termsAccepted;
 
     LicenseManager::Status status = m_license->getStatus();
     bool checking = (status == LicenseManager::Status::Checking);
 
-    ImGui::SetCursorPosX(startX);
     ImGui::BeginDisabled(checking || !m_termsAccepted);
-    if (ImGui::Button("ACTIVATE", ImVec2(colWidth, 36))) {
+    if (widgets::ColoredButton("ACTIVATE", ImVec2(-FLT_MIN, S(38.0f)), theme::GreenLo)) {
         m_license->activate(m_licenseKeyInput);
     }
     ImGui::EndDisabled();
     if (!m_termsAccepted) {
-        ImGui::SetCursorPosX(startX);
-        ImGui::TextDisabled("Tick the box above to enable activation.");
+        ImGui::TextColored(theme::TextDim, "Tick the box above to enable activation.");
     }
 
     ImGui::Spacing();
-    ImGui::SetCursorPosX(startX);
     switch (status) {
         case LicenseManager::Status::Checking:
-            ImGui::TextColored(ImVec4(0.86f, 0.78f, 0.39f, 1.0f),
+            ImGui::TextColored(theme::Yellow,
                                "Verifying... (can take up to a minute if the server was asleep)");
             break;
         case LicenseManager::Status::Invalid:
-            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
+            ImGui::TextColored(theme::Red,
                                "That key is not valid. Check for typos and try again.");
             break;
         case LicenseManager::Status::DeviceLimit:
-            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
+            ImGui::TextColored(theme::Red,
                                "This key is already active on the maximum number of devices.");
-            ImGui::SetCursorPosX(startX);
-            ImGui::TextDisabled("Changed PCs? Contact support with your key to free a slot.");
+            ImGui::TextColored(theme::TextDim, "Changed PCs? Contact support with your key to free a slot.");
             break;
         case LicenseManager::Status::Expired:
-            ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.2f, 1.0f),
+            ImGui::TextColored(theme::Orange,
                                "Your monthly subscription has ended. Renew it or buy a lifetime key.");
             break;
         case LicenseManager::Status::NetworkError:
-            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+            ImGui::TextColored(theme::Orange,
                                "Could not reach the license server. Check your internet and retry.");
             break;
         default:
-            ImGui::TextDisabled("Enter your license key to unlock the app.");
+            ImGui::TextColored(theme::TextDim, "Enter your license key to unlock the app.");
             break;
     }
 
@@ -346,20 +437,16 @@ void UIController::drawActivationScreen() {
     // Server-controlled: see server.js /api/ad + AD_IMAGE_URL/AD_LINK_URL.
     // Absent entirely if the server hasn't configured one.
     if (m_adBanner && m_adBanner->isReady()) {
-        ImGui::Spacing();
-        ImGui::Spacing();
-        ImGui::SetCursorPosX(startX);
-        ImGui::Separator();
-        ImGui::Spacing();
+        widgets::Divider();
 
-        float bannerW = colWidth;
+        float bannerW = ImGui::GetContentRegionAvail().x;
         float bannerH = bannerW / m_adBanner->getAspectRatio();
         // Cap height so a tall/odd-shaped ad image can't dominate the screen.
-        if (bannerH > 140.0f) {
-            bannerH = 140.0f;
+        if (bannerH > S(140.0f)) {
+            bannerH = S(140.0f);
             bannerW = bannerH * m_adBanner->getAspectRatio();
         }
-        ImGui::SetCursorPosX((viewport->WorkSize.x - bannerW) * 0.5f);
+        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - bannerW) * 0.5f);
 
         ImTextureID texId = reinterpret_cast<ImTextureID>(static_cast<intptr_t>(m_adBanner->getTextureId()));
         if (ImGui::ImageButton("##adbanner", texId, ImVec2(bannerW, bannerH))) {
@@ -376,10 +463,10 @@ void UIController::drawActivationScreen() {
     // Small, honest disclosure at the consent moment (activating starts the
     // app's licence checks / anonymous device telemetry).
     ImGui::Spacing();
-    ImGui::SetCursorPosX(startX);
-    ImGui::TextDisabled("By activating you agree to our");
-    ImGui::SameLine(0.0f, 4.0f);
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.28f, 0.69f, 0.98f, 1.0f));
+    ImGui::PushFont(theme::FontSmall);
+    ImGui::TextColored(theme::TextDim, "By activating you agree to our");
+    ImGui::SameLine(0.0f, S(4.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, theme::AccentHi);
     if (ImGui::SmallButton("Terms & Privacy")) {
 #ifdef _WIN32
         ShellExecuteA(nullptr, "open", "https://antigravity-license.onrender.com/legal",
@@ -387,7 +474,10 @@ void UIController::drawActivationScreen() {
 #endif
     }
     ImGui::PopStyleColor();
+    ImGui::PopFont();
 
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
     ImGui::End();
 }
 
@@ -399,16 +489,24 @@ void UIController::drawSetupWizard() {
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                  ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
 
-    float colWidth = 560.0f;
-    float startX = (viewport->WorkSize.x - colWidth) * 0.5f;
+    float cardW = S(640.0f);
+    float startX = (viewport->WorkSize.x - cardW) * 0.5f;
     if (startX < 0) startX = 0;
-    auto indent = [startX]() { ImGui::SetCursorPosX(startX); };
+    ImGui::SetCursorPosY(viewport->WorkSize.y * 0.08f);
+    ImGui::SetCursorPosX(startX);
 
-    ImGui::SetCursorPosY(viewport->WorkSize.y * 0.10f);
-    indent(); ImGui::TextColored(ImVec4(0.22f, 0.74f, 0.97f, 1.0f), "WELCOME - FIRST-TIME SETUP");
-    indent(); ImGui::TextDisabled("Three choices and you're live. You can change all of this later in Settings.");
-    indent(); ImGui::Separator();
-    ImGui::Spacing();
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(26.0f), S(24.0f)));
+    ImGui::BeginChild("WizardCard", ImVec2(cardW, 0),
+                      ImGuiChildFlags_Border | ImGuiChildFlags_AutoResizeY,
+                      ImGuiWindowFlags_AlwaysUseWindowPadding);
+
+    ImGui::PushFont(theme::FontHeading);
+    ImGui::TextColored(theme::Accent, "WELCOME");
+    ImGui::SameLine(0.0f, S(8.0f));
+    ImGui::TextUnformatted("FIRST-TIME SETUP");
+    ImGui::PopFont();
+    ImGui::TextColored(theme::TextDim, "Three choices and you're live. You can change all of this later in Settings.");
+    widgets::Divider();
 
     const auto& inputs = m_audioEngine->getInputDevices();
     const auto& outputs = m_audioEngine->getOutputDevices();
@@ -434,117 +532,86 @@ void UIController::drawSetupWizard() {
     }
 
     // 1. Microphone
-    indent(); ImGui::Text("1. Your microphone");
-    indent(); ImGui::SetNextItemWidth(colWidth);
-    std::string prevIn = inputs.empty() ? "No microphones found" :
-        (m_selectedInputIdx < static_cast<int>(inputs.size()) ? inputs[m_selectedInputIdx].name : "Select");
-    if (ImGui::BeginCombo("##wizmic", prevIn.c_str())) {
-        for (int i = 0; i < static_cast<int>(inputs.size()); ++i) {
-            ImGui::PushID(i);
-            if (ImGui::Selectable(inputs[i].name.c_str(), m_selectedInputIdx == i)) m_selectedInputIdx = i;
-            ImGui::PopID();
-        }
-        ImGui::EndCombo();
-    }
+    ImGui::PushFont(theme::FontBold);
+    ImGui::TextColored(theme::Accent, "1");
+    ImGui::SameLine(0.0f, S(8.0f));
+    ImGui::TextUnformatted("Your microphone");
+    ImGui::PopFont();
+    m_selectedInputIdx = labeledDeviceCombo("", "##wizmic", inputs, m_selectedInputIdx, "No microphones found");
     ImGui::Spacing();
 
     // 2. Where Discord/games listen
-    indent(); ImGui::Text("2. Output that Discord/games will use as your mic");
+    ImGui::PushFont(theme::FontBold);
+    ImGui::TextColored(theme::Accent, "2");
+    ImGui::SameLine(0.0f, S(8.0f));
+    ImGui::TextUnformatted("Output that Discord/games will use as your mic");
+    ImGui::PopFont();
     if (cableIdx >= 0) {
-        indent(); ImGui::TextColored(ImVec4(0.39f, 0.86f, 0.39f, 1.0f),
-                                     "VB-CABLE detected - pick 'CABLE Input' below.");
+        ImGui::TextColored(theme::Green, "VB-CABLE detected - pick 'CABLE Input' below.");
     } else {
-        indent(); ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1.0f),
-                                     "VB-CABLE not found. Without it, others can't hear your effects.");
-        indent();
+        ImGui::TextColored(theme::Yellow, "VB-CABLE not found. Without it, others can't hear your effects.");
         if (ImGui::Button("Get VB-CABLE (free)")) {
 #ifdef _WIN32
             ShellExecuteA(nullptr, "open", "https://vb-audio.com/Cable/", nullptr, nullptr, SW_SHOWNORMAL);
 #endif
         }
         ImGui::SameLine();
-        if (ImGui::Button("I installed it - refresh devices")) {
+        if (widgets::ColoredButton("I installed it - refresh devices", ImVec2(0, 0), theme::PanelHover)) {
             m_audioEngine->refreshDevices();
             preselected = false; // re-run cable preselection with new list
         }
     }
-    indent(); ImGui::SetNextItemWidth(colWidth);
-    std::string prevOut = outputs.empty() ? "No outputs found" :
-        (m_selectedOutputIdx < static_cast<int>(outputs.size()) ? outputs[m_selectedOutputIdx].name : "Select");
-    if (ImGui::BeginCombo("##wizout", prevOut.c_str())) {
-        for (int i = 0; i < static_cast<int>(outputs.size()); ++i) {
-            ImGui::PushID(i);
-            if (ImGui::Selectable(outputs[i].name.c_str(), m_selectedOutputIdx == i)) m_selectedOutputIdx = i;
-            ImGui::PopID();
-        }
-        ImGui::EndCombo();
-    }
+    m_selectedOutputIdx = labeledDeviceCombo("", "##wizout", outputs, m_selectedOutputIdx, "No outputs found");
     ImGui::Spacing();
 
     // 3. Headphones
-    indent(); ImGui::Text("3. Your headphones (to hear the soundboard and yourself)");
-    indent(); ImGui::SetNextItemWidth(colWidth);
-    std::string prevMon = outputs.empty() ? "No outputs found" :
-        (m_selectedMonitorIdx < static_cast<int>(outputs.size()) ? outputs[m_selectedMonitorIdx].name : "Select");
-    if (ImGui::BeginCombo("##wizmon", prevMon.c_str())) {
-        for (int i = 0; i < static_cast<int>(outputs.size()); ++i) {
-            ImGui::PushID(i);
-            if (ImGui::Selectable(outputs[i].name.c_str(), m_selectedMonitorIdx == i)) m_selectedMonitorIdx = i;
-            ImGui::PopID();
-        }
-        ImGui::EndCombo();
-    }
+    ImGui::PushFont(theme::FontBold);
+    ImGui::TextColored(theme::Accent, "3");
+    ImGui::SameLine(0.0f, S(8.0f));
+    ImGui::TextUnformatted("Your headphones (to hear the soundboard and yourself)");
+    ImGui::PopFont();
+    m_selectedMonitorIdx = labeledDeviceCombo("", "##wizmon", outputs, m_selectedMonitorIdx, "No outputs found");
 
-    ImGui::Spacing();
-    indent(); ImGui::Separator();
-    ImGui::Spacing();
+    widgets::Divider();
 
-    indent();
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.6f, 0.2f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.8f, 0.3f, 1.0f));
-    if (ImGui::Button("FINISH & START ENGINE", ImVec2(colWidth * 0.65f, 40))) {
-        const ma_device_id* pInId = (!inputs.empty() && m_selectedInputIdx < static_cast<int>(inputs.size())) ? &inputs[m_selectedInputIdx].id : nullptr;
-        const ma_device_id* pOutId = (!outputs.empty() && m_selectedOutputIdx < static_cast<int>(outputs.size())) ? &outputs[m_selectedOutputIdx].id : nullptr;
-        const ma_device_id* pMonId = (!outputs.empty() && m_selectedMonitorIdx < static_cast<int>(outputs.size())) ? &outputs[m_selectedMonitorIdx].id : nullptr;
-        if (m_audioEngine->start(pInId, pOutId, pMonId)) {
-            m_statusMessage = "Running (Sample Rate: " + std::to_string(static_cast<int>(m_audioEngine->getSampleRate())) + "Hz)";
-            m_isStatusError = false;
-        } else {
-            m_statusMessage = "Failed to start engine. Check device configuration.";
-            m_isStatusError = true;
-        }
+    if (widgets::ColoredButton("FINISH & START ENGINE", ImVec2(cardW * 0.60f, S(40.0f)), theme::GreenLo)) {
+        startEngine();
         m_config->setupDone = true;
         m_showWizard = false;
     }
-    ImGui::PopStyleColor(2);
     ImGui::SameLine();
-    if (ImGui::Button("Skip for now", ImVec2(colWidth * 0.32f, 40))) {
+    if (widgets::ColoredButton("Skip for now", ImVec2(-FLT_MIN, S(40.0f)), theme::PanelHover)) {
         m_config->setupDone = true;
         m_showWizard = false;
     }
 
     ImGui::Spacing();
-    indent(); ImGui::TextDisabled("Tip: in Discord/your game, set the MICROPHONE to 'CABLE Output (VB-Audio Virtual Cable)'.");
+    ImGui::PushFont(theme::FontSmall);
+    ImGui::TextColored(theme::TextDim, "Tip: in Discord/your game, set the MICROPHONE to 'CABLE Output (VB-Audio Virtual Cable)'.");
+    ImGui::PopFont();
 
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
     ImGui::End();
 }
 
 void UIController::drawSettingsPanel() {
     // Scrolls internally; VU meters below get the remaining column height
-    ImGui::BeginChild("SettingsChild", ImVec2(0, 470), true);
-    ImGui::Text("Device Configuration");
-    ImGui::Separator();
-    ImGui::Spacing();
+    float settingsH = std::max(S(320.0f), ImGui::GetContentRegionAvail().y * 0.56f);
+    ImGui::BeginChild("SettingsChild", ImVec2(0, settingsH), ImGuiChildFlags_Border);
+    widgets::SectionLabel("DEVICES");
 
     // Quick routing / output setup instructions
     if (ImGui::CollapsingHeader("Setup Guide - How to route your voice")) {
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::TextDim);
         ImGui::TextWrapped("1. Install a virtual audio cable (free VB-CABLE from vb-audio.com/Cable), then reboot.");
         ImGui::TextWrapped("2. Mic Input = your real microphone.");
         ImGui::TextWrapped("3. Primary Output = 'CABLE Input (VB-Audio Virtual Cable)'. This carries your processed voice to other apps.");
         ImGui::TextWrapped("4. Voice Monitor = your headphones. Soundboard clips always play here; enable Voice Loopback below to also hear your own processed voice.");
-        ImGui::TextWrapped("5. Press START AUDIO ENGINE.");
+        ImGui::TextWrapped("5. Press START ENGINE.");
         ImGui::TextWrapped("6. In Discord / your game, pick 'CABLE Output (VB-Audio Virtual Cable)' as the microphone.");
         ImGui::TextWrapped("No virtual cable? Set Primary Output to your headphones just to try the effects locally.");
+        ImGui::PopStyleColor();
         ImGui::Separator();
         ImGui::Spacing();
     }
@@ -552,238 +619,161 @@ void UIController::drawSettingsPanel() {
     const auto& inputs = m_audioEngine->getInputDevices();
     const auto& outputs = m_audioEngine->getOutputDevices();
 
-    // Input Device Combo
-    std::string previewInput = inputs.empty() ? "None Detected" : (m_selectedInputIdx < inputs.size() ? inputs[m_selectedInputIdx].name : "Select Input");
-    if (ImGui::BeginCombo("Mic Input", previewInput.c_str())) {
-        for (int i = 0; i < inputs.size(); ++i) {
-            // PushID: devices can share identical (truncated) names, which
-            // would otherwise collide ImGui IDs and break selection.
-            ImGui::PushID(i);
-            const bool isSelected = (m_selectedInputIdx == i);
-            if (ImGui::Selectable(inputs[i].name.c_str(), isSelected)) {
-                m_selectedInputIdx = i;
-            }
-            if (isSelected) {
-                ImGui::SetItemDefaultFocus();
-            }
-            ImGui::PopID();
-        }
-        ImGui::EndCombo();
+    m_selectedInputIdx   = labeledDeviceCombo("Mic Input", "##mic", inputs, m_selectedInputIdx, "None Detected");
+    m_selectedOutputIdx  = labeledDeviceCombo("Primary Output (virtual mic)", "##out", outputs, m_selectedOutputIdx, "None Detected");
+    m_selectedMonitorIdx = labeledDeviceCombo("Voice Monitor (your headphones)", "##mon", outputs, m_selectedMonitorIdx, "None Detected");
+
+    // Engine status/error message
+    if (!m_statusMessage.empty()) {
+        ImGui::PushFont(theme::FontSmall);
+        ImGui::TextColored(m_isStatusError ? theme::Red : theme::Green, "%s", m_statusMessage.c_str());
+        ImGui::PopFont();
     }
 
-    // Primary Output Combo (Virtual Mic / Speakers)
-    std::string previewOutput = outputs.empty() ? "None Detected" : (m_selectedOutputIdx < outputs.size() ? outputs[m_selectedOutputIdx].name : "Select Output");
-    if (ImGui::BeginCombo("Primary Output", previewOutput.c_str())) {
-        for (int i = 0; i < outputs.size(); ++i) {
-            ImGui::PushID(i);
-            const bool isSelected = (m_selectedOutputIdx == i);
-            if (ImGui::Selectable(outputs[i].name.c_str(), isSelected)) {
-                m_selectedOutputIdx = i;
-            }
-            if (isSelected) {
-                ImGui::SetItemDefaultFocus();
-            }
-            ImGui::PopID();
-        }
-        ImGui::EndCombo();
-    }
+    widgets::Divider();
+    widgets::SectionLabel("ENGINE");
 
-    // Monitor Output Combo (Physical Headset)
-    std::string previewMonitor = outputs.empty() ? "None Detected" : (m_selectedMonitorIdx < outputs.size() ? outputs[m_selectedMonitorIdx].name : "Select Monitor");
-    if (ImGui::BeginCombo("Voice Monitor", previewMonitor.c_str())) {
-        for (int i = 0; i < outputs.size(); ++i) {
-            ImGui::PushID(i);
-            const bool isSelected = (m_selectedMonitorIdx == i);
-            if (ImGui::Selectable(outputs[i].name.c_str(), isSelected)) {
-                m_selectedMonitorIdx = i;
-            }
-            if (isSelected) {
-                ImGui::SetItemDefaultFocus();
-            }
-            ImGui::PopID();
-        }
-        ImGui::EndCombo();
-    }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    // Duplex latency properties
     bool exclusive = m_audioEngine->isExclusiveMode();
-    if (ImGui::Checkbox("Exclusive Mode (WASAPI)", &exclusive)) {
+    if (widgets::ToggleSwitch("##exclusive", &exclusive, "Exclusive Mode (WASAPI)")) {
         m_audioEngine->setExclusiveMode(exclusive);
     }
     ImGui::SetItemTooltip("Exclusive mode bypasses Windows Mixer for lowest possible latency (<10ms), but blocks other apps from using this audio device.");
 
+    ImGui::PushFont(theme::FontSmall);
+    ImGui::TextColored(theme::TextDim, "Buffer size (ms)");
+    ImGui::PopFont();
     int bufferMs = m_audioEngine->getBufferSizeMs();
-    if (ImGui::SliderInt("Buffer size (ms)", &bufferMs, 5, 100)) {
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::SliderInt("##buffer", &bufferMs, 5, 100)) {
         m_audioEngine->setBufferSizeMs(bufferMs);
     }
     ImGui::SetItemTooltip("Higher = more stable (no crackling), lower = less latency.\nTakes effect the next time the engine is started.");
 
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
+    widgets::Divider();
+    widgets::SectionLabel("MONITORING");
 
-    // Start / Stop Control Buttons
-    bool active = m_audioEngine->isActive();
-    if (active) {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.1f, 0.1f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.9f, 0.2f, 0.2f, 1.0f));
-        if (ImGui::Button("STOP AUDIO ENGINE", ImVec2(-1, 40))) {
-            m_audioEngine->stop();
-            m_statusMessage = "Engine stopped.";
-            m_isStatusError = false;
-        }
-        ImGui::PopStyleColor(2);
-    } else {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.6f, 0.2f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.8f, 0.3f, 1.0f));
-        if (ImGui::Button("START AUDIO ENGINE", ImVec2(-1, 40))) {
-            const ma_device_id* pInId = (!inputs.empty() && m_selectedInputIdx < inputs.size()) ? &inputs[m_selectedInputIdx].id : nullptr;
-            const ma_device_id* pOutId = (!outputs.empty() && m_selectedOutputIdx < outputs.size()) ? &outputs[m_selectedOutputIdx].id : nullptr;
-            const ma_device_id* pMonId = (!outputs.empty() && m_selectedMonitorIdx < outputs.size()) ? &outputs[m_selectedMonitorIdx].id : nullptr;
-            
-            if (m_audioEngine->start(pInId, pOutId, pMonId)) {
-                m_statusMessage = "Running (Sample Rate: " + std::to_string(static_cast<int>(m_audioEngine->getSampleRate())) + "Hz)";
-                m_isStatusError = false;
-            } else {
-                m_statusMessage = "Failed to start engine. Check device configuration.";
-                m_isStatusError = true;
-            }
-        }
-        ImGui::PopStyleColor(2);
-    }
-
-    // Status Message Box
-    ImGui::Spacing();
-    if (m_isStatusError) {
-        ImGui::TextColored(ImVec4(1.0f, 0.2f, 0.2f, 1.0f), "%s", m_statusMessage.c_str());
-    } else {
-        ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.4f, 1.0f), "%s", m_statusMessage.c_str());
-    }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    // Voice monitoring (hear yourself) controls
     bool monitor = m_audioEngine->isMonitorEnabled();
-    if (ImGui::Checkbox("Voice Loopback (Monitoring)", &monitor)) {
+    if (widgets::ToggleSwitch("##loopback", &monitor, "Voice Loopback (hear yourself)")) {
         m_audioEngine->setMonitorEnabled(monitor);
     }
     ImGui::SetItemTooltip("Toggle hearing your OWN VOICE through the Monitor output.\nSoundboard clips play through the Monitor regardless of this setting\n(as long as a Voice Monitor device is selected and the engine is running).");
 
+    ImGui::PushFont(theme::FontSmall);
+    ImGui::TextColored(theme::TextDim, "Monitor volume (your voice)");
+    ImGui::PopFont();
     float monVol = m_audioEngine->getMonitorVolume();
-    if (ImGui::SliderFloat("Monitor Vol", &monVol, 0.0f, 1.5f, "%.2f")) {
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::SliderFloat("##monvol", &monVol, 0.0f, 1.5f, "%.2f")) {
         m_audioEngine->setMonitorVolume(monVol);
     }
     ImGui::SetItemTooltip("Volume of YOUR VOICE through the Monitor output (headphones).");
 
+    ImGui::PushFont(theme::FontSmall);
+    ImGui::TextColored(theme::TextDim, "Soundboard volume (your ears only)");
+    ImGui::PopFont();
     float sbMonVol = m_audioEngine->getSoundboardMonitorVolume();
-    if (ImGui::SliderFloat("Soundboard Vol (you)", &sbMonVol, 0.0f, 1.5f, "%.2f")) {
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::SliderFloat("##sbmonvol", &sbMonVol, 0.0f, 1.5f, "%.2f")) {
         m_audioEngine->setSoundboardMonitorVolume(sbMonVol);
     }
     ImGui::SetItemTooltip("How loud soundboard clips are in YOUR headphones only.\n"
                           "Discord/games always get clips at each clip's own Volume slider,\n"
                           "full strength - this only turns them down for you.");
 
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    // License management
-    ImGui::TextDisabled("License  (app v" APP_VERSION ")");
+    widgets::Divider();
+    widgets::SectionLabel("LICENSE");
 
     std::string plan = m_license->getPlan();
     if (plan == "lifetime") {
-        ImGui::TextColored(ImVec4(0.39f, 0.86f, 0.39f, 1.0f), "Plan: Lifetime");
+        ImGui::TextColored(theme::Green, "Plan: Lifetime");
     } else if (plan == "monthly") {
         std::string until = m_license->getPaidUntil();
         std::string label = "Plan: Monthly";
         if (until.size() >= 10) label += " (renews " + until.substr(0, 10) + ")";
-        ImGui::TextColored(ImVec4(0.39f, 0.75f, 0.86f, 1.0f), "%s", label.c_str());
+        ImGui::TextColored(theme::Cyan, "%s", label.c_str());
     } else if (plan == "trial") {
         std::string until = m_license->getPaidUntil();
         std::string label = "Plan: Trial";
         if (until.size() >= 10) label += " (expires " + until.substr(0, 10) + ")";
-        ImGui::TextColored(ImVec4(0.79f, 0.61f, 0.95f, 1.0f), "%s", label.c_str());
+        ImGui::TextColored(theme::Purple, "%s", label.c_str());
     } else {
         ImGui::TextDisabled("Plan: unknown");
     }
+    ImGui::PushFont(theme::FontSmall);
+    ImGui::TextColored(theme::TextDim, "App v" APP_VERSION);
+    ImGui::PopFont();
 
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.45f, 0.16f, 0.16f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.65f, 0.20f, 0.20f, 1.0f));
-    if (ImGui::Button("Sign out on this PC", ImVec2(-1, 0))) {
+    if (widgets::ColoredButton("Sign out on this PC", ImVec2(-FLT_MIN, 0), theme::RedLo)) {
         m_audioEngine->stop();
         m_license->reset();
     }
-    ImGui::PopStyleColor(2);
     ImGui::SetItemTooltip("Clears the saved key on THIS PC so you can enter a different one.\n"
                           "Your device slot stays reserved - to move the key to a new PC,\n"
                           "contact support to free a slot (this stops stolen keys being\n"
                           "unbound by whoever took them).");
 
     // Refer a friend
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-    ImGui::TextDisabled("Like the app? Share it");
-    if (ImGui::Button("Copy link for a friend", ImVec2(-1, 0))) {
+    widgets::Divider();
+    widgets::SectionLabel("SHARE");
+    if (widgets::ColoredButton("Copy link for a friend", ImVec2(-FLT_MIN, 0), theme::PanelHover)) {
         ImGui::SetClipboardText("https://antigravity-license.onrender.com/");
         m_shareCopiedTimer = 2.5f;
     }
     ImGui::SetItemTooltip("Copies the download page link to your clipboard.");
     if (m_shareCopiedTimer > 0.0f) {
         m_shareCopiedTimer -= ImGui::GetIO().DeltaTime;
-        ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.5f, 1.0f), "Copied! Paste it anywhere.");
+        ImGui::TextColored(theme::Green, "Copied! Paste it anywhere.");
     }
 
     ImGui::EndChild();
 }
 
 void UIController::drawVUMeters() {
-    ImGui::BeginChild("VUChild", ImVec2(0, 0), true);
-    ImGui::Text("Audio Levels & Latency");
-    ImGui::Separator();
-    ImGui::Spacing();
+    ImGui::BeginChild("VUChild", ImVec2(0, ImGui::GetContentRegionAvail().y), ImGuiChildFlags_Border);
+    widgets::SectionLabel("LEVELS & LATENCY");
 
     float micVal = m_audioEngine->getMicLevel();
     float outVal = m_audioEngine->getOutputLevel();
 
     // Latency details
     if (m_audioEngine->isActive()) {
-        ImGui::Text("Reported Frame Size: %d ms", m_audioEngine->getBufferSizeMs());
+        ImGui::PushFont(theme::FontSmall);
+        ImGui::TextColored(theme::TextDim, "Reported frame size: %d ms", m_audioEngine->getBufferSizeMs());
+        ImGui::PopFont();
         if (m_audioEngine->isExclusiveMode()) {
-            ImGui::TextColored(ImVec4(0.39f, 0.86f, 0.39f, 1.0f), "Latency Class: Ultra-Low (<10ms)");
+            ImGui::TextColored(theme::Green, "Latency class: Ultra-Low (<10ms)");
         } else {
-            ImGui::TextColored(ImVec4(0.86f, 0.78f, 0.39f, 1.0f), "Latency Class: Standard (~20ms)");
+            ImGui::TextColored(theme::Yellow, "Latency class: Standard (~20ms)");
         }
     } else {
-        ImGui::Text("Engine Offline");
+        ImGui::TextColored(theme::TextDim, "Engine offline");
     }
 
     ImGui::Spacing();
 
-    // Mic Level Bar
-    ImGui::Text("Microphone:");
-    ImGui::ProgressBar(micVal, ImVec2(-1, 16), "");
+    ImGui::PushFont(theme::FontSmall);
+    ImGui::TextColored(theme::TextDim, "Microphone");
+    ImGui::PopFont();
+    widgets::VuMeter(micVal);
 
     ImGui::Spacing();
 
-    // Output Level Bar
-    ImGui::Text("Output Mix:");
-    ImGui::ProgressBar(outVal, ImVec2(-1, 16), "");
+    ImGui::PushFont(theme::FontSmall);
+    ImGui::TextColored(theme::TextDim, "Output mix");
+    ImGui::PopFont();
+    widgets::VuMeter(outVal);
 
     // Waveform + spectrum of the processed output
     if (m_audioEngine->isActive()) {
         m_audioEngine->copyVizSnapshot(m_vizSnap);
 
         ImGui::Spacing();
-        ImGui::Text("Waveform:");
+        ImGui::PushFont(theme::FontSmall);
+        ImGui::TextColored(theme::TextDim, "Waveform");
+        ImGui::PopFont();
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, theme::Bg);
         ImGui::PlotLines("##waveform", m_vizSnap, 1024, 0, nullptr, -1.0f, 1.0f,
-                         ImVec2(-1, 46));
+                         ImVec2(-1, S(48.0f)));
 
         // 512-point FFT of the newest half of the snapshot, Hann-windowed
         static float re[512], im[512];
@@ -800,36 +790,38 @@ void UIController::drawVUMeters() {
             // Smooth: fast attack, slow decay (like the VU meters)
             m_spectrum[b] = db > m_spectrum[b] ? db : m_spectrum[b] * 0.85f + db * 0.15f;
         }
-        ImGui::Text("Spectrum (0-6 kHz):");
+        ImGui::PushFont(theme::FontSmall);
+        ImGui::TextColored(theme::TextDim, "Spectrum (0-6 kHz)");
+        ImGui::PopFont();
         ImGui::PlotHistogram("##spectrum", m_spectrum, 64, 0, nullptr, 0.0f, 2.2f,
-                             ImVec2(-1, 46));
+                             ImVec2(-1, S(48.0f)));
+        ImGui::PopStyleColor();
     }
 
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Text("Diagnostic Telemetry:");
+    widgets::Divider();
+    widgets::SectionLabel("DIAGNOSTICS");
     if (m_audioEngine->isActive()) {
-        ImGui::Text("Primary Callbacks: %llu", m_audioEngine->getDbgPrimaryCallbacks());
-        ImGui::Text("Monitor Callbacks: %llu", m_audioEngine->getDbgMonitorCallbacks());
-        ImGui::TextColored(m_audioEngine->getDbgUnderflows() > 0 ? ImVec4(1.0f, 0.3f, 0.3f, 1.0f) : ImVec4(0.5f, 0.9f, 0.5f, 1.0f),
-                           "Underflows (Pops): %llu", m_audioEngine->getDbgUnderflows());
+        ImGui::PushFont(theme::FontSmall);
+        ImGui::Text("Primary callbacks: %llu", m_audioEngine->getDbgPrimaryCallbacks());
+        ImGui::Text("Monitor callbacks: %llu", m_audioEngine->getDbgMonitorCallbacks());
+        ImGui::TextColored(m_audioEngine->getDbgUnderflows() > 0 ? theme::Red : theme::Green,
+                           "Underflows (pops): %llu", m_audioEngine->getDbgUnderflows());
         ImGui::Text("Overflows: %llu", m_audioEngine->getDbgOverflows());
-        ImGui::Text("Buffer Cushion: %d samples", static_cast<int>(m_audioEngine->getDbgRingBufferLevel()));
-        if (ImGui::Button("Reset Diagnostics")) {
+        ImGui::Text("Buffer cushion: %d samples", static_cast<int>(m_audioEngine->getDbgRingBufferLevel()));
+        ImGui::PopFont();
+        if (widgets::ColoredButton("Reset Diagnostics", ImVec2(0, 0), theme::PanelHover)) {
             m_audioEngine->resetDbgMetrics();
         }
     } else {
-        ImGui::TextDisabled("Telemetry Offline (Start Engine)");
+        ImGui::TextColored(theme::TextDim, "Telemetry offline (start the engine)");
     }
 
     ImGui::EndChild();
 }
 
 void UIController::drawDSPGraphPanel() {
-    ImGui::BeginChild("DSPChild", ImVec2(0, 0), true);
-    ImGui::Text("Real-Time DSP Chain Editor");
-    ImGui::Separator();
-    ImGui::Spacing();
+    ImGui::BeginChild("DSPChild", ImVec2(0, ImGui::GetContentRegionAvail().y), ImGuiChildFlags_Border);
+    widgets::SectionLabel("EFFECT CHAIN");
 
     // ----- Preset bar: load factory/user presets, save the current chain -----
     {
@@ -838,7 +830,7 @@ void UIController::drawDSPGraphPanel() {
 
         std::string preview = presets.empty() ? "No presets" :
             presets[m_selectedPresetIdx].name + (presets[m_selectedPresetIdx].builtIn ? "  [built-in]" : "");
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.45f);
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.42f);
         if (ImGui::BeginCombo("##preset", preview.c_str())) {
             for (int i = 0; i < static_cast<int>(presets.size()); ++i) {
                 ImGui::PushID(i);
@@ -858,12 +850,12 @@ void UIController::drawDSPGraphPanel() {
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("Save as...")) {
+        if (widgets::ColoredButton("Save as...", ImVec2(0, 0), theme::PanelHover)) {
             ImGui::OpenPopup("SavePresetPopup");
         }
         ImGui::SameLine();
         ImGui::BeginDisabled(presets.empty() || presets[m_selectedPresetIdx].builtIn);
-        if (ImGui::Button("Delete") && !presets.empty()) {
+        if (widgets::ColoredButton("Delete", ImVec2(0, 0), theme::RedLo) && !presets.empty()) {
             DspPresets::remove(presets[m_selectedPresetIdx].name);
             m_presetStatus = "Deleted '" + presets[m_selectedPresetIdx].name + "'";
             m_selectedPresetIdx = 0;
@@ -872,9 +864,9 @@ void UIController::drawDSPGraphPanel() {
 
         if (ImGui::BeginPopup("SavePresetPopup")) {
             ImGui::Text("Save current chain as:");
-            ImGui::SetNextItemWidth(220.0f);
+            ImGui::SetNextItemWidth(S(220.0f));
             ImGui::InputTextWithHint("##presetname", "My preset", m_presetNameInput, sizeof(m_presetNameInput));
-            if (ImGui::Button("Save", ImVec2(100, 0))) {
+            if (ImGui::Button("Save", ImVec2(S(100.0f), 0))) {
                 std::string name = m_presetNameInput;
                 if (!name.empty()) {
                     if (DspPresets::save(name, DspPresets::serialize(*m_dspGraph))) {
@@ -886,19 +878,20 @@ void UIController::drawDSPGraphPanel() {
                 }
             }
             ImGui::SameLine();
-            if (ImGui::Button("Cancel", ImVec2(100, 0))) ImGui::CloseCurrentPopup();
+            if (ImGui::Button("Cancel", ImVec2(S(100.0f), 0))) ImGui::CloseCurrentPopup();
             ImGui::EndPopup();
         }
 
         if (!m_presetStatus.empty()) {
-            ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.5f, 1.0f), "%s", m_presetStatus.c_str());
+            ImGui::PushFont(theme::FontSmall);
+            ImGui::TextColored(theme::Green, "%s", m_presetStatus.c_str());
+            ImGui::PopFont();
         }
-        ImGui::Separator();
         ImGui::Spacing();
     }
 
     const auto& nodes = m_dspGraph->getNodes();
-    
+
     if (nodes.empty()) {
         ImGui::TextDisabled("No active nodes in the DSP graph.");
     }
@@ -907,10 +900,37 @@ void UIController::drawDSPGraphPanel() {
         auto& node = nodes[i];
         ImGui::PushID(static_cast<int>(i));
 
-        // Enable toggle + reorder arrows are drawn BEFORE the header on the
-        // same row (no overlap tricks), so every control is always clickable.
-        ImGui::Checkbox("##enabled", &node->isEnabled());
+        bool enabled = node->isEnabled();
+        const char* name = node->getName();
+        bool open = m_collapsedNodes.find(name) == m_collapsedNodes.end();
+
+        // Each effect is a rounded card; an accent strip on the left marks
+        // enabled effects (drawn after EndChild once the height is known).
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, enabled ? theme::Panel : theme::Bg);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(12.0f), S(9.0f)));
+        ImGui::BeginChild("NodeCard", ImVec2(0, 0),
+                          ImGuiChildFlags_Border | ImGuiChildFlags_AutoResizeY,
+                          ImGuiWindowFlags_AlwaysUseWindowPadding);
+
+        // Header row: [toggle] [name....] [up] [down] [chevron]
+        widgets::ToggleSwitch("##enabled", &node->isEnabled());
         ImGui::SetItemTooltip("Enable / bypass this effect.");
+        ImGui::SameLine();
+
+        float rightControls = ImGui::GetFrameHeight() * 2 + ImGui::GetStyle().ItemSpacing.x * 2 + S(22.0f);
+        float nameWidth = ImGui::GetContentRegionAvail().x - rightControls;
+
+        ImGui::PushFont(theme::FontBold);
+        ImGui::PushStyleColor(ImGuiCol_Text, enabled ? theme::Text : theme::TextDim);
+        ImGui::AlignTextToFramePadding();
+        if (ImGui::Selectable(name, false, 0, ImVec2(nameWidth, 0))) {
+            if (open) m_collapsedNodes.insert(name);
+            else      m_collapsedNodes.erase(name);
+        }
+        ImGui::PopStyleColor();
+        ImGui::PopFont();
+        ImGui::SetItemTooltip(open ? "Click to collapse" : "Click to expand");
+
         ImGui::SameLine();
         if (ImGui::ArrowButton("##up", ImGuiDir_Up)) {
             m_dspGraph->moveNodeUp(i);
@@ -921,38 +941,30 @@ void UIController::drawDSPGraphPanel() {
             m_dspGraph->moveNodeDown(i);
         }
         ImGui::SetItemTooltip("Move later in the chain.");
+
+        // Chevron marking the collapsed state
         ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(theme::TextDim, open ? "v" : ">");
 
-        // Background styling depending on state
-        bool enabled = node->isEnabled();
-        if (enabled) {
-            ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.12f, 0.22f, 0.35f, 0.7f));
-        } else {
-            ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.15f, 0.15f, 0.15f, 0.5f));
-        }
-
-        char label[128];
-        snprintf(label, sizeof(label), "%s##node_hdr", node->getName());
-        bool isOpen = ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen);
-
-        ImGui::PopStyleColor();
-
-        if (isOpen) {
-            ImGui::Indent(15.0f);
+        if (open) {
             ImGui::Spacing();
+            ImGui::Indent(S(8.0f));
+            // Leave room on the right so slider labels are never clipped
+            ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - S(168.0f));
 
             // Downcast nodes to edit custom parameters
             if (auto* gate = dynamic_cast<NoiseGateNode*>(node.get())) {
                 ImGui::SliderFloat("Threshold (dB)", &gate->m_thresholdDB, -70.0f, -10.0f, "%.1f dB");
                 ImGui::SliderFloat("Release Time (ms)", &gate->m_releaseMs, 20.0f, 600.0f, "%.0f ms");
-            } 
+            }
             else if (auto* comp = dynamic_cast<CompressorNode*>(node.get())) {
                 ImGui::SliderFloat("Threshold (dB)", &comp->m_thresholdDB, -40.0f, 0.0f, "%.1f dB");
                 ImGui::SliderFloat("Ratio", &comp->m_ratio, 1.0f, 20.0f, "%.1f:1");
                 ImGui::SliderFloat("Attack (ms)", &comp->m_attackMs, 1.0f, 100.0f, "%.1f ms");
                 ImGui::SliderFloat("Release (ms)", &comp->m_releaseMs, 10.0f, 500.0f, "%.0f ms");
                 ImGui::SliderFloat("Makeup Gain (dB)", &comp->m_makeupGainDB, 0.0f, 24.0f, "%.1f dB");
-            } 
+            }
             else if (auto* eq = dynamic_cast<ParametricEQNode*>(node.get())) {
                 if (ImGui::TreeNode("Low Shelf")) {
                     ImGui::SliderFloat("Freq (Hz)##low", &eq->m_lowShelfFreq, 50.0f, 600.0f, "%.0f Hz");
@@ -970,42 +982,56 @@ void UIController::drawDSPGraphPanel() {
                     ImGui::SliderFloat("Gain (dB)##high", &eq->m_highShelfGain, -15.0f, 15.0f, "%.1f dB");
                     ImGui::TreePop();
                 }
-            } 
+            }
             else if (auto* pitch = dynamic_cast<PitchShifterNode*>(node.get())) {
                 ImGui::SliderFloat("Pitch Factor", &pitch->m_pitchFactor, 0.5f, 2.0f, "%.2f");
-                ImGui::SameLine();
-                if (ImGui::Button("Reset")) { pitch->m_pitchFactor = 1.0f; }
 
                 // Quick presets
-                if (ImGui::Button("Deep Voice")) { pitch->m_pitchFactor = 0.72f; } ImGui::SameLine();
-                if (ImGui::Button("Minion/Chipmunk")) { pitch->m_pitchFactor = 1.45f; } ImGui::SameLine();
-                if (ImGui::Button("Female preset")) { pitch->m_pitchFactor = 1.2f; } ImGui::SameLine();
-                if (ImGui::Button("Male preset")) { pitch->m_pitchFactor = 0.85f; }
+                ImGui::PushFont(theme::FontSmall);
+                if (widgets::ColoredButton("Deep Voice", ImVec2(0, 0), theme::PanelHover)) { pitch->m_pitchFactor = 0.72f; } ImGui::SameLine();
+                if (widgets::ColoredButton("Minion/Chipmunk", ImVec2(0, 0), theme::PanelHover)) { pitch->m_pitchFactor = 1.45f; } ImGui::SameLine();
+                if (widgets::ColoredButton("Female preset", ImVec2(0, 0), theme::PanelHover)) { pitch->m_pitchFactor = 1.2f; } ImGui::SameLine();
+                if (widgets::ColoredButton("Male preset", ImVec2(0, 0), theme::PanelHover)) { pitch->m_pitchFactor = 0.85f; } ImGui::SameLine();
+                if (widgets::ColoredButton("Reset", ImVec2(0, 0), theme::PanelHover)) { pitch->m_pitchFactor = 1.0f; }
+                ImGui::PopFont();
 
                 ImGui::SliderFloat("Dry / Wet", &pitch->m_dryWet, 0.0f, 1.0f, "%.2f");
-            } 
+            }
             else if (auto* robot = dynamic_cast<RobotizerNode*>(node.get())) {
                 ImGui::SliderFloat("Modulation Freq (Hz)", &robot->m_modFreq, 30.0f, 250.0f, "%.1f Hz");
                 ImGui::SliderFloat("Dry / Wet", &robot->m_dryWet, 0.0f, 1.0f, "%.2f");
-            } 
+            }
             else if (auto* reverb = dynamic_cast<ReverbNode*>(node.get())) {
                 ImGui::SliderFloat("Room Size", &reverb->m_roomSize, 0.1f, 0.95f, "%.2f");
                 ImGui::SliderFloat("Damping", &reverb->m_damping, 0.0f, 0.8f, "%.2f");
                 ImGui::SliderFloat("Dry / Wet", &reverb->m_dryWet, 0.0f, 1.0f, "%.2f");
-            } 
+            }
             else if (auto* dist = dynamic_cast<DistortionNode*>(node.get())) {
                 ImGui::SliderFloat("Drive (Gain)", &dist->m_drive, 1.0f, 15.0f, "%.1f");
                 ImGui::SliderFloat("Dry / Wet", &dist->m_dryWet, 0.0f, 1.0f, "%.2f");
-            } 
+            }
             else if (auto* tel = dynamic_cast<TelephoneFilterNode*>(node.get())) {
-                ImGui::Text("Bandpass 300Hz-3.4kHz + Crunch");
+                ImGui::TextColored(theme::TextDim, "Bandpass 300Hz-3.4kHz + Crunch");
                 ImGui::SliderFloat("Dry / Wet", &tel->m_dryWet, 0.0f, 1.0f, "%.2f");
             }
 
-            ImGui::Spacing();
-            ImGui::Unindent(15.0f);
-            ImGui::Separator();
+            ImGui::PopItemWidth();
+            ImGui::Unindent(S(8.0f));
         }
+
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor();
+
+        // Accent strip for enabled effects
+        if (enabled) {
+            ImVec2 mn = ImGui::GetItemRectMin();
+            ImVec2 mx = ImGui::GetItemRectMax();
+            ImGui::GetWindowDrawList()->AddRectFilled(
+                ImVec2(mn.x, mn.y), ImVec2(mn.x + S(3.0f), mx.y),
+                ImGui::GetColorU32(theme::Accent), S(2.0f));
+        }
+        ImGui::Spacing();
         ImGui::PopID();
     }
 
@@ -1013,11 +1039,11 @@ void UIController::drawDSPGraphPanel() {
 }
 
 void UIController::drawSoundboardPanel() {
-    ImGui::BeginChild("SoundboardChild", ImVec2(0, 0), true);
-    
-    ImGui::Text("Soundboard Engine  v" APP_VERSION);
-    ImGui::SameLine(ImGui::GetWindowWidth() - 130);
-    if (ImGui::Button("ADD AUDIO FILE")) {
+    ImGui::BeginChild("SoundboardChild", ImVec2(0, ImGui::GetContentRegionAvail().y), ImGuiChildFlags_Border);
+
+    widgets::SectionLabel("SOUNDBOARD");
+    ImGui::SameLine(ImGui::GetContentRegionAvail().x - S(110.0f));
+    if (widgets::ColoredButton("+ Add Sound", ImVec2(S(118.0f), 0), theme::Accent)) {
         std::string path = openFileDialog();
         if (!path.empty()) {
             // Copies the file into the app's "sounds" folder and loads it
@@ -1030,24 +1056,19 @@ void UIController::drawSoundboardPanel() {
         ImGui::SetTooltip("Files are copied into:\n%s\nSounds in that folder load automatically at startup.", soundsDir.c_str());
     }
 
-    ImGui::Separator();
-
     // Mic ducking controls (lower the mic while a sound is playing)
     auto mixer = m_soundboard->getMixer();
-    ImGui::Checkbox("Duck Mic", &mixer->m_duckingEnabled);
+    widgets::ToggleSwitch("##duck", &mixer->m_duckingEnabled, "Duck Mic");
     ImGui::SetItemTooltip("Lower your microphone while a sound is playing.");
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(140.0f);
-    ImGui::SliderFloat("Mic level##duck", &mixer->m_duckingAmount, 0.0f, 1.0f, "%.2f");
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::SliderFloat("##ducklevel", &mixer->m_duckingAmount, 0.0f, 1.0f, "Mic level  %.2f");
     ImGui::SetItemTooltip("Mic volume while sounds play (0 = muted, 1 = unchanged).");
 
     // Stop-all: button + bindable global hotkey
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.25f, 0.10f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.75f, 0.35f, 0.15f, 1.0f));
-    if (ImGui::Button("STOP ALL SOUNDS", ImVec2(160, 0))) {
+    if (widgets::ColoredButton("STOP ALL SOUNDS", ImVec2(S(160.0f), 0), theme::Orange)) {
         m_soundboard->stopAll();
     }
-    ImGui::PopStyleColor(2);
     ImGui::SetItemTooltip("Fade out and stop every playing clip.");
 
     ImGui::SameLine();
@@ -1057,7 +1078,7 @@ void UIController::drawSoundboardPanel() {
     } else {
         stopAllLabel += Soundboard::getKeyName(m_soundboard->getStopAllHotkey());
     }
-    if (ImGui::Button((stopAllLabel + "##stopall").c_str(), ImVec2(-1, 0))) {
+    if (widgets::ColoredButton((stopAllLabel + "##stopall").c_str(), ImVec2(-FLT_MIN, 0), theme::PanelHover)) {
         m_bindingStopAll = true;
         m_bindingClip = nullptr;
     }
@@ -1069,55 +1090,67 @@ void UIController::drawSoundboardPanel() {
         m_bindingStopAll = false;
     }
 
-    ImGui::Separator();
+    ImGui::PushFont(theme::FontSmall);
+    ImGui::TextColored(theme::TextDim, "Tip: keys 1-9 play the first nine clips while the app is focused.");
+    ImGui::PopFont();
     ImGui::Spacing();
 
     auto& clips = m_soundboard->getClips();
-    
+
     if (clips.empty()) {
-        ImGui::TextDisabled("No sounds loaded. Click 'ADD AUDIO FILE' to load WAV/MP3 files.");
+        ImGui::TextDisabled("No sounds loaded. Click '+ Add Sound' to load WAV/MP3 files.");
     }
 
-    // Grid implementation for soundboard clips (2 columns)
-    ImGui::Columns(2, "SoundboardGrid", false);
-    
+    // Responsive clip card grid: as many columns as the panel width allows
+    float availW = ImGui::GetContentRegionAvail().x;
+    int cols = std::max(1, static_cast<int>(availW / S(225.0f)));
+    float spacing = ImGui::GetStyle().ItemSpacing.x;
+    float cellW = (availW - spacing * (cols - 1)) / cols;
+
     for (size_t i = 0; i < clips.size(); ++i) {
         auto& clip = clips[i];
+        if (i % cols != 0) ImGui::SameLine();
         ImGui::PushID(static_cast<int>(i));
 
-        // Draw a nice boxed area for each clip
-        ImGui::BeginChild("ClipCard", ImVec2(0, 150), true, ImGuiWindowFlags_NoScrollbar);
-        
-        // Clip Name (clipped)
-        ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.95f, 1.0f), "%s", clip->name.c_str());
+        bool playing = clip->isPlaying;
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, theme::PanelAlt);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(10.0f), S(9.0f)));
+        ImGui::BeginChild("ClipCard", ImVec2(cellW, S(172.0f)),
+                          ImGuiChildFlags_Border,
+                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_AlwaysUseWindowPadding);
+
+        // Clip Name (clipped to one line)
+        ImGui::PushFont(theme::FontBold);
+        ImGui::PushStyleColor(ImGuiCol_Text, playing ? theme::Green : theme::Text);
+        ImGui::TextUnformatted(clip->name.c_str());
+        ImGui::PopStyleColor();
+        ImGui::PopFont();
         ImGui::Separator();
         ImGui::Spacing();
 
         // Control Buttons
-        if (clip->isPlaying) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.7f, 0.2f, 1.0f));
-            if (ImGui::Button("PLAYING", ImVec2(60, 24))) {
+        float half = (ImGui::GetContentRegionAvail().x - spacing) * 0.5f;
+        if (playing) {
+            if (widgets::ColoredButton("PLAYING", ImVec2(half, S(26.0f)), theme::Green)) {
                 m_soundboard->playClip(clip);
             }
-            ImGui::PopStyleColor();
         } else {
-            if (ImGui::Button("PLAY", ImVec2(60, 24))) {
+            if (widgets::ColoredButton("PLAY", ImVec2(half, S(26.0f)), theme::Accent)) {
                 m_soundboard->playClip(clip);
             }
         }
-        
         ImGui::SameLine();
-        if (ImGui::Button("STOP", ImVec2(60, 24))) {
+        if (widgets::ColoredButton("STOP", ImVec2(-FLT_MIN, S(26.0f)), theme::PanelHover)) {
             m_soundboard->stopClip(clip);
         }
 
         ImGui::Spacing();
-        
-        // Loop Toggle
+
+        // Loop Toggle + Volume Slider on one row
         ImGui::Checkbox("Loop", &clip->loop);
-        
-        // Volume Slider
-        ImGui::SliderFloat("Vol", &clip->volume, 0.0f, 1.0f, "%.1f");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::SliderFloat("##vol", &clip->volume, 0.0f, 1.0f, "Vol %.1f");
 
         // Hotkey Button
         std::string keyLabel = "Hotkey: ";
@@ -1126,14 +1159,13 @@ void UIController::drawSoundboardPanel() {
         } else {
             keyLabel += Soundboard::getKeyName(clip->hotkey);
         }
-
-        if (ImGui::Button(keyLabel.c_str(), ImVec2(-1, 22))) {
+        if (widgets::ColoredButton(keyLabel.c_str(), ImVec2(-FLT_MIN, S(24.0f)), theme::PanelHover)) {
             m_bindingClip = clip;
         }
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Left-click to bind key. Right-click card/button to clear.");
         }
-        
+
         // Right click for hotkey/removal actions
         if (ImGui::BeginPopupContextWindow()) {
             if (ImGui::MenuItem("Clear Hotkey")) {
@@ -1152,12 +1184,11 @@ void UIController::drawSoundboardPanel() {
         }
 
         ImGui::EndChild();
-
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor();
         ImGui::PopID();
-        ImGui::NextColumn();
     }
 
-    ImGui::Columns(1);
     ImGui::EndChild();
 }
 
@@ -1182,61 +1213,4 @@ std::string UIController::openFileDialog() {
     }
 #endif
     return "";
-}
-
-void UIController::applyDarkModernTheme() {
-    ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding = 8.0f;
-    style.ChildRounding = 6.0f;
-    style.FrameRounding = 4.0f;
-    style.GrabRounding = 3.0f;
-    style.PopupRounding = 4.0f;
-    style.ScrollbarRounding = 4.0f;
-
-    style.WindowBorderSize = 1.0f;
-    style.ChildBorderSize = 1.0f;
-    style.FrameBorderSize = 0.5f;
-
-    ImVec4* colors = style.Colors;
-    
-    // Deep black-gray background colors
-    colors[ImGuiCol_Text]                   = ImVec4(0.95f, 0.95f, 0.97f, 1.00f);
-    colors[ImGuiCol_TextDisabled]           = ImVec4(0.50f, 0.50f, 0.55f, 1.00f);
-    colors[ImGuiCol_WindowBg]               = ImVec4(0.06f, 0.06f, 0.08f, 1.00f);
-    colors[ImGuiCol_ChildBg]                = ImVec4(0.09f, 0.09f, 0.12f, 1.00f);
-    colors[ImGuiCol_PopupBg]                = ImVec4(0.12f, 0.12f, 0.16f, 0.98f);
-    
-    // Subtle borders
-    colors[ImGuiCol_Border]                 = ImVec4(0.18f, 0.18f, 0.24f, 1.00f);
-    colors[ImGuiCol_BorderShadow]           = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
-    
-    // Sleek frame/widgets (sliders, checkboxes, comboboxes)
-    colors[ImGuiCol_FrameBg]                = ImVec4(0.14f, 0.14f, 0.18f, 1.00f);
-    colors[ImGuiCol_FrameBgHovered]         = ImVec4(0.20f, 0.20f, 0.26f, 1.00f);
-    colors[ImGuiCol_FrameBgActive]          = ImVec4(0.25f, 0.25f, 0.32f, 1.00f);
-    
-    // Headers & Collapsing categories
-    colors[ImGuiCol_Header]                 = ImVec4(0.15f, 0.15f, 0.20f, 1.00f);
-    colors[ImGuiCol_HeaderHovered]          = ImVec4(0.22f, 0.22f, 0.30f, 1.00f);
-    colors[ImGuiCol_HeaderActive]           = ImVec4(0.28f, 0.28f, 0.38f, 1.00f);
-
-    // Active sky-blue highlights for buttons and sliders
-    colors[ImGuiCol_Button]                 = ImVec4(0.16f, 0.44f, 0.65f, 1.00f);
-    colors[ImGuiCol_ButtonHovered]          = ImVec4(0.22f, 0.58f, 0.85f, 1.00f);
-    colors[ImGuiCol_ButtonActive]           = ImVec4(0.28f, 0.69f, 0.98f, 1.00f);
-    
-    colors[ImGuiCol_SliderGrab]             = ImVec4(0.22f, 0.58f, 0.85f, 1.00f);
-    colors[ImGuiCol_SliderGrabActive]       = ImVec4(0.28f, 0.69f, 0.98f, 1.00f);
-    
-    colors[ImGuiCol_CheckMark]              = ImVec4(0.28f, 0.69f, 0.98f, 1.00f);
-
-    colors[ImGuiCol_ScrollbarBg]            = ImVec4(0.10f, 0.10f, 0.14f, 1.00f);
-    colors[ImGuiCol_ScrollbarGrab]          = ImVec4(0.18f, 0.18f, 0.24f, 1.00f);
-    colors[ImGuiCol_ScrollbarGrabHovered]   = ImVec4(0.24f, 0.24f, 0.32f, 1.00f);
-    colors[ImGuiCol_ScrollbarGrabActive]    = ImVec4(0.30f, 0.30f, 0.40f, 1.00f);
-    
-    colors[ImGuiCol_PlotLines]              = ImVec4(0.22f, 0.58f, 0.85f, 1.00f);
-    colors[ImGuiCol_PlotLinesHovered]       = ImVec4(0.28f, 0.69f, 0.98f, 1.00f);
-    colors[ImGuiCol_PlotHistogram]          = ImVec4(0.22f, 0.58f, 0.85f, 1.00f);
-    colors[ImGuiCol_PlotHistogramHovered]   = ImVec4(0.28f, 0.69f, 0.98f, 1.00f);
 }

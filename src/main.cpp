@@ -14,6 +14,7 @@
 #include "audio/Mixer.h"
 #include "soundboard/Soundboard.h"
 #include "ui/UIController.h"
+#include "ui/Theme.h"
 #include "license/LicenseManager.h"
 #include "config/AppConfig.h"
 #include "ads/AdBanner.h"
@@ -42,8 +43,11 @@ int main(int, char**) {
     const char* glsl_version = "#version 130";
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+    // Size the window (and our fonts, below) to the monitor's DPI scale so
+    // the UI is crisp instead of bitmap-stretched on high-DPI screens.
+    glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
     // 2. Create Window
-    GLFWwindow* window = glfwCreateWindow(1100, 720, "Antigravity Voice Engine & Soundboard", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(1280, 800, "Antigravity Voice Engine & Soundboard", nullptr, nullptr);
     if (window == nullptr) {
         std::cerr << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
@@ -51,6 +55,13 @@ int main(int, char**) {
     }
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1); // Enable vsync (locks UI loop to screen refresh rate)
+
+    float contentScaleX = 1.0f, contentScaleY = 1.0f;
+    glfwGetWindowContentScale(window, &contentScaleX, &contentScaleY);
+    glfwSetWindowSizeLimits(window,
+                            static_cast<int>(1024 * contentScaleX),
+                            static_cast<int>(640 * contentScaleX),
+                            GLFW_DONT_CARE, GLFW_DONT_CARE);
 
     // GLFW doesn't automatically apply the .exe's embedded icon (installer/app.rc)
     // to the live window - Explorer/the taskbar shortcut show it, but the running
@@ -72,8 +83,9 @@ int main(int, char**) {
     ImGuiIO& io = ImGui::GetIO(); (void)io;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; // Enable Keyboard Controls
 
-    // Setup Dear ImGui style
-    ImGui::StyleColorsDark();
+    // Fonts + full application theme (palette, metrics), DPI-scaled
+    theme::LoadFonts(contentScaleX);
+    theme::Apply(contentScaleX);
 
     // Setup Platform/Renderer backends
     ImGui_ImplGlfw_InitForOpenGL(window, true);
@@ -171,7 +183,7 @@ int main(int, char**) {
         int display_w, display_h;
         glfwGetFramebufferSize(window, &display_w, &display_h);
         glViewport(0, 0, display_w, display_h);
-        glClearColor(0.06f, 0.06f, 0.08f, 1.0f);
+        glClearColor(theme::Bg.x, theme::Bg.y, theme::Bg.z, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
         
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());

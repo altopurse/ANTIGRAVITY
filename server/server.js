@@ -293,11 +293,11 @@ function page(title, bodyHtml, opts = {}) {
   body{font-family:system-ui,sans-serif;background:#0f0f14;color:#f2f2f7;display:flex;justify-content:center;
     padding:48px 16px;margin:0}
   main{max-width:${width}px;width:100%}
-  h1{color:#38b0f8;font-size:1.6rem;margin-bottom:4px}
+  h1{color:#8a74ff;font-size:1.6rem;margin-bottom:4px}
   h2{color:#f2f2f7;font-size:1.15rem;margin:32px 0 12px}
-  a.btn,button{display:inline-block;background:#2a70a6;color:#fff;border:none;border-radius:8px;
+  a.btn,button{display:inline-block;background:#6d5ae0;color:#fff;border:none;border-radius:8px;
     padding:12px 24px;font-size:1rem;text-decoration:none;cursor:pointer;font-family:inherit}
-  a.btn:hover,button:hover{background:#38b0f8}
+  a.btn:hover,button:hover{background:#8a74ff}
   a.btn.big{padding:16px 36px;font-size:1.15rem;font-weight:600}
   a.btn.ghost{background:#1c1c26;border:1px solid #2e2e3e}
   a.btn.ghost:hover{background:#26263a}
@@ -313,7 +313,7 @@ function page(title, bodyHtml, opts = {}) {
   .card .price span{font-size:0.95rem;color:#9a9aa5;font-weight:400}
   .features{list-style:none;padding:0;margin:0;display:grid;grid-template-columns:1fr 1fr;gap:10px 20px}
   .features li{color:#c7c7d1;font-size:0.95rem;padding-left:22px;position:relative}
-  .features li::before{content:"✓";position:absolute;left:0;color:#38b0f8;font-weight:700}
+  .features li::before{content:"✓";position:absolute;left:0;color:#8a74ff;font-weight:700}
   @media (max-width:520px){.features{grid-template-columns:1fr}}
   .chip{background:#161620;border:1px solid #2e2e3e;border-radius:20px;padding:6px 14px;
     font-size:0.85rem;color:#c7c7d1}
@@ -349,6 +349,9 @@ app.get("/", async (req, res) => {
     page(
       "Antigravity Voice Engine - voice changer & soundboard",
       `<div class="hero">
+         <div style="display:inline-block;background:rgba(138,116,255,0.14);border:1px solid rgba(138,116,255,0.45);
+              color:#a794ff;border-radius:20px;padding:6px 16px;font-size:0.85rem;font-weight:600;margin-bottom:14px">
+           NEW &middot; v2.1 is out - all-new interface &darr;</div>
          <h1 style="font-size:2.1rem;line-height:1.15">Change your voice live.<br>Pay £10 once - own it forever.</h1>
          <p class="tagline">A real-time voice changer <strong>and</strong> soundboard for Windows, in one
          low-latency app. Sound like a monster, a robot, or a chipmunk - and fire off sound effects -
@@ -374,6 +377,22 @@ app.get("/", async (req, res) => {
        </video>
        <p class="muted" style="text-align:center;margin-top:8px">Live in-game voice chat, changed in real time.</p>
 
+       <h2 id="v21">New in v2.1 - a completely redesigned app</h2>
+       <p class="muted">Same ultra-low-latency engine, brand-new cockpit. Every control got a modern,
+       readable home - and it's crisp on high-DPI screens now.</p>
+       <img src="/ui-v21.png" alt="Antigravity Voice Engine v2.1 - redesigned interface"
+            style="width:100%;border-radius:12px;border:1px solid #2e2e3e;display:block" loading="lazy">
+       <ul class="features" style="margin-top:14px">
+         <li>All-new dark interface with a fresh look and new logo</li>
+         <li>Sharp text on high-DPI / scaled displays</li>
+         <li>Resizable window with adjustable panels</li>
+         <li>Effect chain shown as clear on/off cards</li>
+         <li>Soundboard grid that adapts to your window size</li>
+         <li>One-click engine start, always visible up top</li>
+       </ul>
+       <p class="muted">Already own it? Open the app and hit the green <strong>Update</strong> button -
+       your key keeps working, nothing to re-buy.</p>
+
        <h2>What you get</h2>
        <ul class="features">
          <li>8 real-time voice effects (pitch, EQ, compressor, reverb, robot &amp; more)</li>
@@ -386,7 +405,7 @@ app.get("/", async (req, res) => {
 
        <h2>Pricing</h2>
        <div class="pricing">
-         <div class="card" style="border-color:#38b0f8">
+         <div class="card" style="border-color:#8a74ff">
            <div>Lifetime <span style="color:#5fd18a;font-size:0.8rem">· best value</span></div>
            <div class="price">£10<span> once</span></div>
            <a class="btn" href="/buy?plan=life">Buy lifetime</a>
@@ -403,8 +422,8 @@ app.get("/", async (req, res) => {
          first time. It's safe - here's how to get past it:</p>
          <ol style="color:#c7c7d1;line-height:1.7;margin:0;padding-left:20px">
            <li>Run the downloaded <code>AntigravityVoiceEngine-Setup.exe</code></li>
-           <li>On the blue screen, click <strong style="color:#38b0f8">More info</strong></li>
-           <li>Then click <strong style="color:#38b0f8">Run anyway</strong></li>
+           <li>On the blue screen, click <strong style="color:#8a74ff">More info</strong></li>
+           <li>Then click <strong style="color:#8a74ff">Run anyway</strong></li>
            <li>Follow the wizard - it even installs the virtual mic driver for you</li>
          </ol>
        </div>
@@ -445,7 +464,7 @@ app.get("/legal", (req, res) => {
           the rules of Discord, a game, or any platform.</li>
       <li>A licence key unlocks the app. One key works on up to ${DEVICE_LIMIT} machines. Don't resell
           or publicly share keys - shared keys can be revoked.</li>
-      <li>Payments are handled by <a href="https://www.mollie.com" style="color:#38b0f8">Mollie</a>;
+      <li>Payments are handled by <a href="https://www.mollie.com" style="color:#8a74ff">Mollie</a>;
           we never see your card details. Lifetime keys are one-time; monthly keys stop working if the
           subscription ends.</li>
     </ul>
