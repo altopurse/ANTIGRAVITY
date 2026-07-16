@@ -1,4 +1,5 @@
 #include "DSPGraph.h"
+#include "license/Entitlement.h"
 #include <algorithm>
 
 DSPGraph::DSPGraph() {}
@@ -15,9 +16,14 @@ void DSPGraph::prepare(double sampleRate) {
 void DSPGraph::process(float* buffer, size_t numSamples, int numChannels) {
     std::lock_guard<std::mutex> lock(m_mutex);
     for (auto& node : m_nodes) {
-        if (node->isEnabled()) {
-            node->process(buffer, numSamples, numChannels);
-        }
+        if (!node->isEnabled()) continue;
+        // Entitlement gate (check #1): premium effects are bypassed on the free
+        // tier. Free effects (requiredFeature()==0) always run. Premium nodes
+        // also re-verify inside their own process() (Effects.cpp, a separate
+        // object file), so NOP-ing this one call still doesn't unlock them.
+        uint32_t req = node->requiredFeature();
+        if (req != 0u && !ent::hasFeature(req)) continue;
+        node->process(buffer, numSamples, numChannels);
     }
 }
 

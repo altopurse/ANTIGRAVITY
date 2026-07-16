@@ -274,11 +274,15 @@ void AudioEngine::primaryCallback(void* pOutput, const void* pInput, ma_uint32 f
     }
     bool soundboardActive = m_mixer->processAndMix(outBuf, frameCount, m_channels, m_soundboardScratch.data());
 
-    // 4c. Anti-tamper dropout: if the app isn't genuinely entitled (e.g. the
-    // UI gate was patched but the scattered guard never got set), quietly
-    // corrupt the output so it "works" in the menu but is unusable for real
-    // voice chat. Applied before viz/monitor so both feeds inherit it.
-    if (!ent::ok()) {
+    // 4c. Anti-tamper dropout: the free tier is a legitimate, un-degraded
+    // state now (enforcement is per-feature: premium effects bypass and
+    // soundboard caps at the free limit). So the whole-output corruption
+    // fires only on an INTEGRITY failure - a patched binary / attached
+    // debugger clearing g_clean - not merely on "not licensed". A crack that
+    // forces the feature mask still trips the tamper checks and lands here,
+    // so premium stays broken for it. Applied before viz/monitor so both
+    // feeds inherit it.
+    if (!ent::clean()) {
         applyDegrade(outBuf, frameCount);
     }
 

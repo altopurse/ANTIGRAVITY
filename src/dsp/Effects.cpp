@@ -15,6 +15,10 @@ void NoiseGateNode::prepare(double sampleRate) {
 
 void NoiseGateNode::process(float* buffer, size_t numSamples, int numChannels) {
     if (!m_enabled) return;
+    // Entitlement gate (check #2 - see DSPGraph::process for #1). Independent
+    // bypass in this translation unit so unlocking premium effects takes
+    // patching every copy, not one.
+    if (!ent::hasFeature(ent::FEAT_ALL_EFFECTS)) return;
 
     float threshold = pow(10.0f, m_thresholdDB / 20.0f);
     // Release coefficient based on release time
@@ -58,6 +62,7 @@ void CompressorNode::prepare(double sampleRate) {
 
 void CompressorNode::process(float* buffer, size_t numSamples, int numChannels) {
     if (!m_enabled) return;
+    if (!ent::hasFeature(ent::FEAT_ALL_EFFECTS)) return;
 
     float threshold = pow(10.0f, m_thresholdDB / 20.0f);
     float attackCoeff = exp(-1.0f / (m_attackMs * 0.001f * m_sampleRate));
@@ -110,6 +115,7 @@ void ParametricEQNode::prepare(double sampleRate) {
 
 void ParametricEQNode::process(float* buffer, size_t numSamples, int numChannels) {
     if (!m_enabled) return;
+    if (!ent::hasFeature(ent::FEAT_ALL_EFFECTS)) return;
 
     // Recalculate coefficients
     for (int c = 0; c < std::min(numChannels, 2); ++c) {
@@ -216,6 +222,7 @@ void RobotizerNode::prepare(double sampleRate) {
 
 void RobotizerNode::process(float* buffer, size_t numSamples, int numChannels) {
     if (!m_enabled) return;
+    if (!ent::hasFeature(ent::FEAT_ALL_EFFECTS)) return;
 
     double phaseIncrement = 2.0 * M_PI * m_modFreq / m_sampleRate;
 
@@ -320,6 +327,7 @@ void DistortionNode::prepare(double) {}
 
 void DistortionNode::process(float* buffer, size_t numSamples, int numChannels) {
     if (!m_enabled) return;
+    if (!ent::hasFeature(ent::FEAT_ALL_EFFECTS)) return;
 
     float d = m_drive;
     float norm = 1.0f / tanh(d);
@@ -346,6 +354,7 @@ void TelephoneFilterNode::prepare(double sampleRate) {
 
 void TelephoneFilterNode::process(float* buffer, size_t numSamples, int numChannels) {
     if (!m_enabled) return;
+    if (!ent::hasFeature(ent::FEAT_ALL_EFFECTS)) return;
 
     for (int c = 0; c < std::min(numChannels, 2); ++c) {
         // Highpass at 300Hz, Lowpass at 3400Hz

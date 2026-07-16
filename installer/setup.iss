@@ -2,7 +2,7 @@
 ; Compiled by package.ps1 (paths below are relative to this file).
 
 #define AppName "Antigravity Voice Engine"
-#define AppVersion "2.1.1"
+#define AppVersion "2.2.0"
 #define AppExe "voice-changer.exe"
 
 [Setup]

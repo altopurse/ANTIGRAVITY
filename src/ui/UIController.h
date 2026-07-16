@@ -69,6 +69,15 @@ private:
     // First-launch setup wizard (shown until finished or skipped once)
     bool m_showWizard = false;
 
+    // Activation screen shown on demand (Upgrade button / License section),
+    // no longer a mandatory gate now that the free tier exists.
+    bool m_showActivation = false;
+
+    // Cached each frame from the licence status: true = paid (all effects,
+    // unlimited clips). Drives the UI's lock treatments only - the engine
+    // enforces independently via ent::hasFeature.
+    bool m_isPro = false;
+
     // DSP preset UI state
     int m_selectedPresetIdx = 0;
     char m_presetNameInput[64] = {0};

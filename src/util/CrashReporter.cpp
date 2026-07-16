@@ -1,5 +1,6 @@
 #include "CrashReporter.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
@@ -18,6 +19,11 @@
 #endif
 
 namespace {
+
+// Set from CrashReporter::setConsent once the user accepts Terms & Privacy.
+// The dying process reads it with a relaxed load; the local crash.txt is
+// written regardless, only the network ping is gated.
+std::atomic<bool> g_consent{false};
 
 #ifdef _WIN32
 const wchar_t* kServerHost = L"antigravity-license.onrender.com";
@@ -55,7 +61,9 @@ void report(const char* kind, unsigned long code, void* address) {
         }
     }
 
-    // 2. One short-timeout ping to the server (fire and forget)
+    // 2. One short-timeout ping to the server (fire and forget) - only if the
+    // user consented; without consent we keep the local breadcrumb only.
+    if (!g_consent.load(std::memory_order_relaxed)) return;
     std::string q = std::string("/api/crash?v=") + APP_VERSION +
                     "&os=" + osTag() + "&kind=" + kind + "&code=" + codeHex;
     std::wstring path(q.begin(), q.end());
@@ -105,6 +113,10 @@ void install() {
     SetUnhandledExceptionFilter(sehFilter);
     std::set_terminate(onTerminate);
 #endif
+}
+
+void setConsent(bool granted) {
+    g_consent.store(granted, std::memory_order_relaxed);
 }
 
 } // namespace CrashReporter

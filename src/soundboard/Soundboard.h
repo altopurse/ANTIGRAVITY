@@ -17,7 +17,12 @@ public:
 
     // Copy an external file into the app "sounds" folder (removing the
     // dependency on its original location) and load it from there.
+    // Returns nullptr if the free-tier clip cap is reached (see canAddMoreClips).
     std::shared_ptr<SoundBoardClip> importSound(const std::string& sourcePath);
+
+    // False when on the free tier and the board already holds the free maximum.
+    // The UI uses this to show an upgrade prompt instead of the file dialog.
+    bool canAddMoreClips() const;
 
     // Load every audio file already present in the app "sounds" folder
     void loadSoundsFromAppFolder();

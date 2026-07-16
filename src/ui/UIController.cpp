@@ -1,6 +1,7 @@
 #include "UIController.h"
 #include "Theme.h"
 #include "Widgets.h"
+#include "util/CrashReporter.h"
 #include "dsp/Effects.h"
 #include "dsp/DspPresets.h"
 #include "license/Entitlement.h"
@@ -190,13 +191,19 @@ void UIController::render() {
         ent::runTamperChecks();
     }
 
-    // Gate the whole app behind license activation
-    if (m_license && !m_license->isUnlocked()) {
+    // Freemium: the app is usable without a licence (free tier - reverb +
+    // pitch, 2 soundboard clips). Enforcement is engine-level (ent::hasFeature),
+    // NOT this screen, so there's no security in gating the UI. The activation
+    // screen is now an on-demand overlay reached from the Upgrade button / the
+    // License section, shown here only when explicitly requested.
+    m_isPro = m_license && m_license->isUnlocked();
+
+    if (m_showActivation) {
         drawActivationScreen();
         return;
     }
 
-    // First-launch device setup wizard
+    // First-launch device setup wizard (also the first place consent is asked)
     if (m_showWizard) {
         drawSetupWizard();
         return;
@@ -333,6 +340,26 @@ void UIController::drawTopBar() {
         ImGui::SetItemTooltip("A newer version is ready - opens the download page.");
     }
 
+    // Free tier: an "Upgrade" button + FREE pill, the always-visible conversion
+    // hook. Pro users see neither (nothing to sell them).
+    if (!m_isPro) {
+        std::string upLabel = "Upgrade to Pro";
+        float upW = ImGui::CalcTextSize(upLabel.c_str()).x + ImGui::GetStyle().FramePadding.x * 2 + S(4.0f);
+        x -= spacing + upW;
+        ImGui::SetCursorPos(ImVec2(x, centerY - btnH * 0.5f));
+        if (widgets::ColoredButton(upLabel.c_str(), ImVec2(0, btnH), theme::Accent)) {
+            m_showActivation = true;
+        }
+        ImGui::SetItemTooltip("Unlock all 8 effects and unlimited soundboard clips.");
+
+        ImGui::PushFont(theme::FontSmall);
+        float freeW = ImGui::CalcTextSize("FREE").x + S(38.0f);
+        ImGui::PopFont();
+        x -= spacing + freeW;
+        ImGui::SetCursorPos(ImVec2(x, centerY - pillH * 0.5f));
+        widgets::StatusPill("FREE", theme::Yellow);
+    }
+
     ImGui::SetCursorPosY(std::max(afterBrandY, centerY + btnH * 0.5f));
     ImGui::Spacing();
     ImGui::Separator();
@@ -359,12 +386,23 @@ void UIController::drawActivationScreen() {
                       ImGuiChildFlags_Border | ImGuiChildFlags_AutoResizeY,
                       ImGuiWindowFlags_AlwaysUseWindowPadding);
 
+    // Header row with a "back to Free" exit (activation is optional now)
     ImGui::PushFont(theme::FontHeading);
-    ImGui::TextColored(theme::Accent, "ANTIGRAVITY");
+    ImGui::TextColored(theme::Accent, "UPGRADE TO");
     ImGui::SameLine(0.0f, S(8.0f));
-    ImGui::TextUnformatted("VOICE ENGINE");
+    ImGui::TextUnformatted("PRO");
     ImGui::PopFont();
-    ImGui::TextColored(theme::TextDim, "License required: 10 GBP lifetime, or 2 GBP/month");
+    ImGui::SameLine();
+    {
+        const char* back = "Continue with Free  X";
+        float bw = ImGui::CalcTextSize(back).x + ImGui::GetStyle().FramePadding.x * 2;
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - bw);
+        if (widgets::ColoredButton(back, ImVec2(0, 0), theme::PanelHover)) {
+            m_showActivation = false;
+        }
+    }
+    ImGui::TextColored(theme::TextDim, "Pro unlocks all 8 effects and unlimited soundboard clips.");
+    ImGui::TextColored(theme::TextDim, "10 GBP lifetime, or 2 GBP/month. Free tier keeps working either way.");
     widgets::Divider();
 
     if (widgets::ColoredButton("Buy License", ImVec2(-FLT_MIN, S(38.0f)), theme::Accent)) {
@@ -375,6 +413,10 @@ void UIController::drawActivationScreen() {
     ImGui::TextColored(theme::TextDim, "copy the license key it shows and paste it below.");
     ImGui::PopFont();
     ImGui::Spacing();
+
+    // Auto-close the overlay the moment entitlement flips to Pro (activation
+    // verifies on a background thread; this catches the transition).
+    if (m_isPro) m_showActivation = false;
 
     ImGui::SetNextItemWidth(-FLT_MIN);
     ImGui::InputTextWithHint("##licensekey", "ANTI-XXXXXXXXXX-XXXXXXXXXXXXXXXXXXXX",
@@ -399,6 +441,7 @@ void UIController::drawActivationScreen() {
     ImGui::SameLine(0.0f, S(4.0f));
     ImGui::TextDisabled("(GDPR compliant)");
     if (m_config) m_config->termsAccepted = m_termsAccepted;
+    CrashReporter::setConsent(m_termsAccepted);
 
     LicenseManager::Status status = m_license->getStatus();
     bool checking = (status == LicenseManager::Status::Checking);
@@ -581,6 +624,31 @@ void UIController::drawSetupWizard() {
 
     widgets::Divider();
 
+    // GDPR / Terms consent. This wizard is now the app's unavoidable first
+    // screen (there's no forced activation gate anymore), so it's where consent
+    // is obtained before any usage/telemetry. Remembered in config so returning
+    // users aren't re-asked. The crash reporter's network ping is gated on this.
+    if (m_config && m_config->termsAccepted) m_termsAccepted = true;
+    ImGui::Checkbox("##wizterms", &m_termsAccepted);
+    ImGui::SameLine(0.0f, S(6.0f));
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("I accept the");
+    ImGui::SameLine(0.0f, S(4.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, theme::AccentHi);
+    if (ImGui::SmallButton("Terms & Privacy")) {
+#ifdef _WIN32
+        ShellExecuteA(nullptr, "open", "https://antigravity-license.onrender.com/legal",
+                      nullptr, nullptr, SW_SHOWNORMAL);
+#endif
+    }
+    ImGui::PopStyleColor();
+    ImGui::SameLine(0.0f, S(4.0f));
+    ImGui::TextDisabled("(GDPR compliant)");
+    if (m_config) m_config->termsAccepted = m_termsAccepted;
+    CrashReporter::setConsent(m_termsAccepted);
+
+    ImGui::Spacing();
+    ImGui::BeginDisabled(!m_termsAccepted);
     if (widgets::ColoredButton("FINISH & START ENGINE", ImVec2(cardW * 0.60f, S(40.0f)), theme::GreenLo)) {
         startEngine();
         m_config->setupDone = true;
@@ -591,9 +659,16 @@ void UIController::drawSetupWizard() {
         m_config->setupDone = true;
         m_showWizard = false;
     }
+    ImGui::EndDisabled();
+    if (!m_termsAccepted) {
+        ImGui::PushFont(theme::FontSmall);
+        ImGui::TextColored(theme::TextDim, "Tick the box above to continue.");
+        ImGui::PopFont();
+    }
 
     ImGui::Spacing();
     ImGui::PushFont(theme::FontSmall);
+    ImGui::TextColored(theme::TextDim, "Free tier: Reverb + Pitch Shifter and 2 soundboard clips. Upgrade to Pro anytime for everything.");
     ImGui::TextColored(theme::TextDim, "Tip: in Discord/your game, set the MICROPHONE to 'CABLE Output (VB-Audio Virtual Cable)'.");
     ImGui::PopFont();
 
@@ -690,34 +765,59 @@ void UIController::drawSettingsPanel() {
     widgets::Divider();
     widgets::SectionLabel("LICENSE");
 
-    std::string plan = m_license->getPlan();
-    if (plan == "lifetime") {
-        ImGui::TextColored(theme::Green, "Plan: Lifetime");
-    } else if (plan == "monthly") {
-        std::string until = m_license->getPaidUntil();
-        std::string label = "Plan: Monthly";
-        if (until.size() >= 10) label += " (renews " + until.substr(0, 10) + ")";
-        ImGui::TextColored(theme::Cyan, "%s", label.c_str());
-    } else if (plan == "trial") {
-        std::string until = m_license->getPaidUntil();
-        std::string label = "Plan: Trial";
-        if (until.size() >= 10) label += " (expires " + until.substr(0, 10) + ")";
-        ImGui::TextColored(theme::Purple, "%s", label.c_str());
+    if (!m_isPro) {
+        // Free tier: show what's unlocked by upgrading, plus the reason if a
+        // key was rejected/expired (drops here instead of a hard lock now).
+        ImGui::TextColored(theme::Yellow, "Plan: Free");
+        ImGui::PushFont(theme::FontSmall);
+        ImGui::TextColored(theme::TextDim, "2 soundboard clips - Reverb & Pitch Shifter only.");
+        switch (m_license->getStatus()) {
+            case LicenseManager::Status::Expired:
+                ImGui::TextColored(theme::Orange, "Your subscription ended - renew to restore Pro.");
+                break;
+            case LicenseManager::Status::DeviceLimit:
+                ImGui::TextColored(theme::Orange, "Key is on too many devices - free a slot to restore Pro.");
+                break;
+            case LicenseManager::Status::Invalid:
+                ImGui::TextColored(theme::Red, "Last key was rejected. Enter a valid one to unlock Pro.");
+                break;
+            default:
+                break;
+        }
+        ImGui::PopFont();
+        if (widgets::ColoredButton("Unlock Pro - all effects + unlimited sounds", ImVec2(-FLT_MIN, S(32.0f)), theme::Accent)) {
+            m_showActivation = true;
+        }
     } else {
-        ImGui::TextDisabled("Plan: unknown");
-    }
-    ImGui::PushFont(theme::FontSmall);
-    ImGui::TextColored(theme::TextDim, "App v" APP_VERSION);
-    ImGui::PopFont();
+        std::string plan = m_license->getPlan();
+        if (plan == "lifetime") {
+            ImGui::TextColored(theme::Green, "Plan: Pro (Lifetime)");
+        } else if (plan == "monthly") {
+            std::string until = m_license->getPaidUntil();
+            std::string label = "Plan: Pro (Monthly)";
+            if (until.size() >= 10) label += " - renews " + until.substr(0, 10);
+            ImGui::TextColored(theme::Cyan, "%s", label.c_str());
+        } else if (plan == "trial") {
+            std::string until = m_license->getPaidUntil();
+            std::string label = "Plan: Pro (Trial)";
+            if (until.size() >= 10) label += " - expires " + until.substr(0, 10);
+            ImGui::TextColored(theme::Purple, "%s", label.c_str());
+        } else {
+            ImGui::TextColored(theme::Green, "Plan: Pro");
+        }
+        ImGui::PushFont(theme::FontSmall);
+        ImGui::TextColored(theme::TextDim, "App v" APP_VERSION);
+        ImGui::PopFont();
 
-    if (widgets::ColoredButton("Sign out on this PC", ImVec2(-FLT_MIN, 0), theme::RedLo)) {
-        m_audioEngine->stop();
-        m_license->reset();
+        if (widgets::ColoredButton("Sign out on this PC", ImVec2(-FLT_MIN, 0), theme::RedLo)) {
+            m_audioEngine->stop();
+            m_license->reset();
+        }
+        ImGui::SetItemTooltip("Drops this PC back to the free tier so you can enter a different key.\n"
+                              "Your device slot stays reserved - to move the key to a new PC,\n"
+                              "contact support to free a slot (this stops stolen keys being\n"
+                              "unbound by whoever took them).");
     }
-    ImGui::SetItemTooltip("Clears the saved key on THIS PC so you can enter a different one.\n"
-                          "Your device slot stays reserved - to move the key to a new PC,\n"
-                          "contact support to free a slot (this stops stolen keys being\n"
-                          "unbound by whoever took them).");
 
     // Refer a friend
     widgets::Divider();
@@ -730,6 +830,25 @@ void UIController::drawSettingsPanel() {
     if (m_shareCopiedTimer > 0.0f) {
         m_shareCopiedTimer -= ImGui::GetIO().DeltaTime;
         ImGui::TextColored(theme::Green, "Copied! Paste it anywhere.");
+    }
+
+    // Sponsored banner - free tier only (Pro is always ad-free, as promised).
+    // Server-controlled and absent unless one is configured, so this is usually
+    // nothing. See server.js /api/ad + AdBanner.
+    if (!m_isPro && m_adBanner && m_adBanner->isReady()) {
+        widgets::Divider();
+        widgets::SectionLabel("SPONSORED");
+        float bannerW = ImGui::GetContentRegionAvail().x;
+        float bannerH = bannerW / m_adBanner->getAspectRatio();
+        if (bannerH > S(120.0f)) { bannerH = S(120.0f); bannerW = bannerH * m_adBanner->getAspectRatio(); }
+        ImTextureID texId = reinterpret_cast<ImTextureID>(static_cast<intptr_t>(m_adBanner->getTextureId()));
+        if (ImGui::ImageButton("##adbannermain", texId, ImVec2(bannerW, bannerH))) {
+#ifdef _WIN32
+            std::string url = m_adBanner->getLinkUrl();
+            if (!url.empty()) ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+#endif
+        }
+        ImGui::SetItemTooltip("Sponsored");
     }
 
     ImGui::EndChild();
@@ -910,33 +1029,48 @@ void UIController::drawDSPGraphPanel() {
         bool enabled = node->isEnabled();
         const char* name = node->getName();
         bool open = m_collapsedNodes.find(name) == m_collapsedNodes.end();
+        // Premium effect the free tier can't run: shown but locked. (Engine
+        // enforces separately; this is purely the visual treatment.)
+        bool locked = !m_isPro && node->requiredFeature() != 0u;
 
         // Each effect is a rounded card; an accent strip on the left marks
         // enabled effects (drawn after EndChild once the height is known).
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, enabled ? theme::Panel : theme::Bg);
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, (enabled && !locked) ? theme::Panel : theme::Bg);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(12.0f), S(9.0f)));
         ImGui::BeginChild("NodeCard", ImVec2(0, 0),
                           ImGuiChildFlags_Border | ImGuiChildFlags_AutoResizeY,
                           ImGuiWindowFlags_AlwaysUseWindowPadding);
 
-        // Header row: [toggle] [name....] [up] [down] [chevron]
-        widgets::ToggleSwitch("##enabled", &node->isEnabled());
-        ImGui::SetItemTooltip("Enable / bypass this effect.");
+        // Header row: [toggle / PRO badge] [name....] [up] [down] [chevron]
+        if (locked) {
+            if (widgets::ColoredButton("PRO", ImVec2(ImGui::GetFrameHeight() * 1.75f, ImGui::GetFrameHeight()), theme::Accent)) {
+                m_showActivation = true;
+            }
+            ImGui::SetItemTooltip("Locked on the free tier - click to unlock all effects with Pro.");
+        } else {
+            widgets::ToggleSwitch("##enabled", &node->isEnabled());
+            ImGui::SetItemTooltip("Enable / bypass this effect.");
+        }
         ImGui::SameLine();
 
         float rightControls = ImGui::GetFrameHeight() * 2 + ImGui::GetStyle().ItemSpacing.x * 2 + S(22.0f);
         float nameWidth = ImGui::GetContentRegionAvail().x - rightControls;
 
         ImGui::PushFont(theme::FontBold);
-        ImGui::PushStyleColor(ImGuiCol_Text, enabled ? theme::Text : theme::TextDim);
+        ImGui::PushStyleColor(ImGuiCol_Text, locked ? theme::TextDim : (enabled ? theme::Text : theme::TextDim));
         ImGui::AlignTextToFramePadding();
         if (ImGui::Selectable(name, false, 0, ImVec2(nameWidth, 0))) {
-            if (open) m_collapsedNodes.insert(name);
-            else      m_collapsedNodes.erase(name);
+            if (locked) {
+                m_showActivation = true;
+            } else if (open) {
+                m_collapsedNodes.insert(name);
+            } else {
+                m_collapsedNodes.erase(name);
+            }
         }
         ImGui::PopStyleColor();
         ImGui::PopFont();
-        ImGui::SetItemTooltip(open ? "Click to collapse" : "Click to expand");
+        ImGui::SetItemTooltip(locked ? "Pro effect - click to unlock" : (open ? "Click to collapse" : "Click to expand"));
 
         ImGui::SameLine();
         if (ImGui::ArrowButton("##up", ImGuiDir_Up)) {
@@ -957,6 +1091,18 @@ void UIController::drawDSPGraphPanel() {
         if (open) {
             ImGui::Spacing();
             ImGui::Indent(S(8.0f));
+
+            // Locked premium effect: show a one-line upsell, and render the
+            // params visible-but-greyed (disabled) so users see what they'd get.
+            if (locked) {
+                ImGui::PushFont(theme::FontSmall);
+                ImGui::TextColored(theme::Accent, "Pro effect");
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Unlock ->")) m_showActivation = true;
+                ImGui::PopFont();
+            }
+            ImGui::BeginDisabled(locked);
+
             // Leave room on the right so slider labels are never clipped
             ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - S(168.0f));
 
@@ -1023,6 +1169,7 @@ void UIController::drawDSPGraphPanel() {
             }
 
             ImGui::PopItemWidth();
+            ImGui::EndDisabled();
             ImGui::Unindent(S(8.0f));
         }
 
@@ -1030,8 +1177,8 @@ void UIController::drawDSPGraphPanel() {
         ImGui::PopStyleVar();
         ImGui::PopStyleColor();
 
-        // Accent strip for enabled effects
-        if (enabled) {
+        // Accent strip for enabled effects (not for locked ones - they don't run)
+        if (enabled && !locked) {
             ImVec2 mn = ImGui::GetItemRectMin();
             ImVec2 mx = ImGui::GetItemRectMax();
             ImGui::GetWindowDrawList()->AddRectFilled(
@@ -1048,20 +1195,38 @@ void UIController::drawDSPGraphPanel() {
 void UIController::drawSoundboardPanel() {
     ImGui::BeginChild("SoundboardChild", ImVec2(0, ImGui::GetContentRegionAvail().y), ImGuiChildFlags_Border);
 
+    bool canAdd = m_soundboard->canAddMoreClips();
+
     widgets::SectionLabel("SOUNDBOARD");
-    ImGui::SameLine(ImGui::GetContentRegionAvail().x - S(110.0f));
-    if (widgets::ColoredButton("+ Add Sound", ImVec2(S(118.0f), 0), theme::Accent)) {
-        std::string path = openFileDialog();
-        if (!path.empty()) {
-            // Copies the file into the app's "sounds" folder and loads it
-            // from there, so the clip survives if the original moves.
-            m_soundboard->importSound(path);
-            persistConfig();
+    ImGui::SameLine(ImGui::GetContentRegionAvail().x - S(150.0f));
+    if (canAdd) {
+        if (widgets::ColoredButton("+ Add Sound", ImVec2(S(158.0f), 0), theme::Accent)) {
+            std::string path = openFileDialog();
+            if (!path.empty()) {
+                // Copies the file into the app's "sounds" folder and loads it
+                // from there, so the clip survives if the original moves.
+                m_soundboard->importSound(path);
+                persistConfig();
+            }
         }
+        if (ImGui::IsItemHovered()) {
+            static std::string soundsDir = Soundboard::getSoundsDirectory();
+            ImGui::SetTooltip("Files are copied into:\n%s\nSounds in that folder load automatically at startup.", soundsDir.c_str());
+        }
+    } else {
+        // Free tier at the clip cap: the add button becomes an upsell.
+        if (widgets::ColoredButton("Unlock unlimited - PRO", ImVec2(S(158.0f), 0), theme::Accent)) {
+            m_showActivation = true;
+        }
+        ImGui::SetItemTooltip("The free tier holds 2 sounds. Upgrade to Pro for unlimited.");
     }
-    if (ImGui::IsItemHovered()) {
-        static std::string soundsDir = Soundboard::getSoundsDirectory();
-        ImGui::SetTooltip("Files are copied into:\n%s\nSounds in that folder load automatically at startup.", soundsDir.c_str());
+
+    // Free-tier slot counter
+    if (!m_isPro) {
+        ImGui::PushFont(theme::FontSmall);
+        int used = static_cast<int>(m_soundboard->getClips().size());
+        ImGui::TextColored(theme::TextDim, "%d / %d free clip slots used", std::min(used, ent::FREE_CLIP_LIMIT), ent::FREE_CLIP_LIMIT);
+        ImGui::PopFont();
     }
 
     // Mic ducking controls (lower the mic while a sound is playing)
@@ -1123,7 +1288,9 @@ void UIController::drawSoundboardPanel() {
         ImGui::PushID(static_cast<int>(i));
 
         bool playing = clip->isPlaying;
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, theme::PanelAlt);
+        // Clips past the free cap are kept (never deleted) but locked until Pro.
+        bool clipLocked = !m_isPro && static_cast<int>(i) >= ent::FREE_CLIP_LIMIT;
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, clipLocked ? theme::Bg : theme::PanelAlt);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(10.0f), S(9.0f)));
         ImGui::BeginChild("ClipCard", ImVec2(cellW, S(172.0f)),
                           ImGuiChildFlags_Border,
@@ -1131,7 +1298,7 @@ void UIController::drawSoundboardPanel() {
 
         // Clip Name (clipped to one line)
         ImGui::PushFont(theme::FontBold);
-        ImGui::PushStyleColor(ImGuiCol_Text, playing ? theme::Green : theme::Text);
+        ImGui::PushStyleColor(ImGuiCol_Text, clipLocked ? theme::TextDim : (playing ? theme::Green : theme::Text));
         ImGui::TextUnformatted(clip->name.c_str());
         ImGui::PopStyleColor();
         ImGui::PopFont();
@@ -1140,23 +1307,33 @@ void UIController::drawSoundboardPanel() {
 
         // Control Buttons
         float half = (ImGui::GetContentRegionAvail().x - spacing) * 0.5f;
-        if (playing) {
-            if (widgets::ColoredButton("PLAYING", ImVec2(half, S(26.0f)), theme::Green)) {
-                m_soundboard->playClip(clip);
+        if (clipLocked) {
+            // Play is the upsell; the rest of the card is greyed out.
+            if (widgets::ColoredButton("PRO - Unlock", ImVec2(-FLT_MIN, S(26.0f)), theme::Accent)) {
+                m_showActivation = true;
             }
+            ImGui::SetItemTooltip("Free holds 2 clips. Upgrade to Pro to play this one.");
         } else {
-            if (widgets::ColoredButton("PLAY", ImVec2(half, S(26.0f)), theme::Accent)) {
-                m_soundboard->playClip(clip);
+            if (playing) {
+                if (widgets::ColoredButton("PLAYING", ImVec2(half, S(26.0f)), theme::Green)) {
+                    m_soundboard->playClip(clip);
+                }
+            } else {
+                if (widgets::ColoredButton("PLAY", ImVec2(half, S(26.0f)), theme::Accent)) {
+                    m_soundboard->playClip(clip);
+                }
             }
-        }
-        ImGui::SameLine();
-        if (widgets::ColoredButton("STOP", ImVec2(-FLT_MIN, S(26.0f)), theme::PanelHover)) {
-            m_soundboard->stopClip(clip);
+            ImGui::SameLine();
+            if (widgets::ColoredButton("STOP", ImVec2(-FLT_MIN, S(26.0f)), theme::PanelHover)) {
+                m_soundboard->stopClip(clip);
+            }
         }
 
         ImGui::Spacing();
 
-        // Loop Toggle + Volume Slider on one row
+        // Loop / volume / hotkey - greyed for locked clips (still removable via
+        // the right-click menu below, which stays active).
+        ImGui::BeginDisabled(clipLocked);
         ImGui::Checkbox("Loop", &clip->loop);
         ImGui::SameLine();
         ImGui::SetNextItemWidth(-FLT_MIN);
@@ -1175,6 +1352,7 @@ void UIController::drawSoundboardPanel() {
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Left-click to bind key. Right-click card/button to clear.");
         }
+        ImGui::EndDisabled();
 
         // Right click for hotkey/removal actions
         if (ImGui::BeginPopupContextWindow()) {

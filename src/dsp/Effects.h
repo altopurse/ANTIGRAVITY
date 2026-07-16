@@ -1,5 +1,6 @@
 #pragma once
 #include "DSPNode.h"
+#include "license/Entitlement.h"
 #include <vector>
 #include <cmath>
 
@@ -105,6 +106,7 @@ public:
     void process(float* buffer, size_t numSamples, int numChannels) override;
     const char* getName() const override { return "Noise Gate"; }
     bool& isEnabled() override { return m_enabled; }
+    uint32_t requiredFeature() const override { return ent::FEAT_ALL_EFFECTS; }
 
     bool m_enabled = true;
     float m_thresholdDB = -45.0f; // Gate opens above this
@@ -124,6 +126,7 @@ public:
     void process(float* buffer, size_t numSamples, int numChannels) override;
     const char* getName() const override { return "Compressor"; }
     bool& isEnabled() override { return m_enabled; }
+    uint32_t requiredFeature() const override { return ent::FEAT_ALL_EFFECTS; }
 
     bool m_enabled = true;
     float m_thresholdDB = -18.0f;
@@ -145,6 +148,7 @@ public:
     void process(float* buffer, size_t numSamples, int numChannels) override;
     const char* getName() const override { return "Parametric EQ"; }
     bool& isEnabled() override { return m_enabled; }
+    uint32_t requiredFeature() const override { return ent::FEAT_ALL_EFFECTS; }
 
     bool m_enabled = true;
     
@@ -201,6 +205,7 @@ public:
     void process(float* buffer, size_t numSamples, int numChannels) override;
     const char* getName() const override { return "Robotizer (Ring Mod)"; }
     bool& isEnabled() override { return m_enabled; }
+    uint32_t requiredFeature() const override { return ent::FEAT_ALL_EFFECTS; }
 
     bool m_enabled = false;
     float m_modFreq = 80.0f; // Carrier sine frequency
@@ -288,6 +293,7 @@ public:
     void process(float* buffer, size_t numSamples, int numChannels) override;
     const char* getName() const override { return "Distortion"; }
     bool& isEnabled() override { return m_enabled; }
+    uint32_t requiredFeature() const override { return ent::FEAT_ALL_EFFECTS; }
 
     bool m_enabled = false;
     float m_drive = 5.0f; // Gain multiplier before waveshaping
@@ -302,6 +308,7 @@ public:
     void process(float* buffer, size_t numSamples, int numChannels) override;
     const char* getName() const override { return "Telephone Filter"; }
     bool& isEnabled() override { return m_enabled; }
+    uint32_t requiredFeature() const override { return ent::FEAT_ALL_EFFECTS; }
 
     bool m_enabled = false;
     float m_dryWet = 1.0f;

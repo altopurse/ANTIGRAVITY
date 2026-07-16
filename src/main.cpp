@@ -118,7 +118,11 @@ int main(int, char**) {
     // Restore persisted settings (%APPDATA%/Antigravity/config.json):
     // engine options, monitoring, ducking, hotkeys, per-clip state.
     auto config = std::make_shared<AppConfig>();
-    if (config->load()) {
+    bool configLoaded = config->load();
+    // Honour prior consent for the crash ping before the UI even shows (the UI
+    // keeps this in sync as the user accepts Terms in the wizard/activation).
+    CrashReporter::setConsent(config->termsAccepted);
+    if (configLoaded) {
         audioEngine->setBufferSizeMs(config->bufferMs);
         audioEngine->setExclusiveMode(config->exclusiveMode);
         audioEngine->setMonitorEnabled(config->monitorEnabled);

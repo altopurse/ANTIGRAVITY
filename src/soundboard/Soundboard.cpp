@@ -1,4 +1,5 @@
 #include "Soundboard.h"
+#include "license/Entitlement.h"
 #include <iostream>
 #include <filesystem>
 #include <algorithm>
@@ -90,7 +91,17 @@ std::string Soundboard::getSoundsDirectory() {
     return soundsDir.string();
 }
 
+bool Soundboard::canAddMoreClips() const {
+    if (ent::hasFeature(ent::FEAT_UNLIMITED_CLIPS)) return true;
+    return static_cast<int>(m_mixer->getClips().size()) < ent::FREE_CLIP_LIMIT;
+}
+
 std::shared_ptr<SoundBoardClip> Soundboard::importSound(const std::string& sourcePath) {
+    // Free-tier add cap (second, independent check; the playback cap in
+    // Mixer::playClip is the security-critical one). Refuse to import a new
+    // clip once the free board is full, so nothing is copied to disk needlessly.
+    if (!canAddMoreClips()) return nullptr;
+
     std::error_code ec;
     fs::path src(sourcePath);
     fs::path soundsDir(getSoundsDirectory());

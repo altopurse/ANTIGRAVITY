@@ -328,7 +328,7 @@ app.get("/", async (req, res) => {
   trackView(req, res, "home");
   const monthlyBtn = bindingEnabled
     ? `<div class="card">
-         <div>Monthly <span style="color:#5fd18a;font-size:0.8rem">· try it cheap</span></div>
+         <div>Pro Monthly <span style="color:#5fd18a;font-size:0.8rem">· try it cheap</span></div>
          <div class="price">£0.80<span> first month</span></div>
          <div class="muted" style="font-size:0.85rem;margin:-8px 0 12px">then £3/month · cancel anytime</div>
          <a class="btn ghost" href="/buy?plan=monthly">Start for £0.80</a>
@@ -351,22 +351,23 @@ app.get("/", async (req, res) => {
       `<div class="hero">
          <div style="display:inline-block;background:rgba(138,116,255,0.14);border:1px solid rgba(138,116,255,0.45);
               color:#a794ff;border-radius:20px;padding:6px 16px;font-size:0.85rem;font-weight:600;margin-bottom:14px">
-           NEW &middot; v2.1 is out - all-new interface &darr;</div>
-         <h1 style="font-size:2.1rem;line-height:1.15">Change your voice live.<br>Pay £10 once - own it forever.</h1>
+           NEW &middot; Now free to use - upgrade to Pro anytime &darr;</div>
+         <h1 style="font-size:2.1rem;line-height:1.15">Change your voice live.<br>Free to use - Pro unlocks everything.</h1>
          <p class="tagline">A real-time voice changer <strong>and</strong> soundboard for Windows, in one
          low-latency app. Sound like a monster, a robot, or a chipmunk - and fire off sound effects -
-         live in Discord, games, Zoom and OBS. No subscription trap.</p>
+         live in Discord, games, Zoom and OBS. No account, no subscription trap.</p>
          <a class="btn big" href="/download">Download for Windows - Free</a>
          ${proof}
-         <p class="muted" style="margin-top:12px">Free to download - a one-time £10 key (or £0.80 first month, then £3/mo) unlocks it.
+         <p class="muted" style="margin-top:12px">Free forever: Reverb + Pitch Shifter and 2 soundboard clips.
+         Unlock all 8 effects and unlimited sounds with a one-time £10 Pro key (or £0.80 first month, then £3/mo).
          Works with Discord, Zoom, OBS, and any game.</p>
        </div>
 
        <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:24px 0">
-         <span class="chip">✓ One-time payment</span>
+         <span class="chip">✓ Free to use</span>
          <span class="chip">✓ No account needed</span>
-         <span class="chip">✓ 2 devices per key</span>
-         <span class="chip">✓ Auto-updates</span>
+         <span class="chip">✓ Upgrade anytime</span>
+         <span class="chip">✓ 2 devices per Pro key</span>
        </div>
 
        <h2>See it in action</h2>
@@ -377,43 +378,61 @@ app.get("/", async (req, res) => {
        </video>
        <p class="muted" style="text-align:center;margin-top:8px">Live in-game voice chat, changed in real time.</p>
 
-       <h2 id="v21">New in v2.1 - a completely redesigned app</h2>
-       <p class="muted">Same ultra-low-latency engine, brand-new cockpit. Every control got a modern,
-       readable home - and it's crisp on high-DPI screens now.</p>
-       <img src="/ui-v21.png" alt="Antigravity Voice Engine v2.1 - redesigned interface"
+       <h2 id="v21">New: free tier + a completely redesigned app</h2>
+       <p class="muted">The app is now free to use - try the real thing before you ever pay - on top of
+       the all-new interface. Same ultra-low-latency engine, brand-new cockpit, crisp on high-DPI screens.</p>
+       <img src="/ui-v21.png" alt="Antigravity Voice Engine - redesigned interface"
             style="width:100%;border-radius:12px;border:1px solid #2e2e3e;display:block" loading="lazy">
        <ul class="features" style="margin-top:14px">
+         <li>Free tier - use it forever, upgrade to Pro anytime</li>
          <li>All-new dark interface with a fresh look and new logo</li>
          <li>Sharp text on high-DPI / scaled displays</li>
          <li>Resizable window with adjustable panels</li>
          <li>Effect chain shown as clear on/off cards</li>
          <li>Soundboard grid that adapts to your window size</li>
-         <li>One-click engine start, always visible up top</li>
        </ul>
-       <p class="muted">Already own it? Open the app and hit the green <strong>Update</strong> button -
+       <p class="muted">Already have a Pro key? Open the app and hit the green <strong>Update</strong> button -
        your key keeps working, nothing to re-buy.</p>
 
-       <h2>What you get</h2>
-       <ul class="features">
-         <li>8 real-time voice effects (pitch, EQ, compressor, reverb, robot &amp; more)</li>
-         <li>One-click voice presets: Deep, Chipmunk, Robot, Telephone, Monster…</li>
-         <li>Built-in soundboard with global hotkeys and per-clip volume</li>
-         <li>Ultra-low latency (WASAPI exclusive mode)</li>
-         <li>Guided first-time setup - installs the virtual mic driver for you</li>
-         <li>Your settings, presets &amp; sounds saved between sessions</li>
-       </ul>
+       <h2>Free vs Pro</h2>
+       <div class="pricing" style="grid-template-columns:1fr 1fr">
+         <div class="card" style="text-align:left">
+           <div style="text-align:center;font-weight:600;margin-bottom:6px">Free</div>
+           <ul class="features" style="grid-template-columns:1fr">
+             <li>Reverb &amp; Pitch Shifter effects</li>
+             <li>One-click pitch presets (Deep, Chipmunk…)</li>
+             <li>2 soundboard clips with global hotkeys</li>
+             <li>Ultra-low latency + guided setup</li>
+             <li>No account, no time limit</li>
+           </ul>
+         </div>
+         <div class="card" style="text-align:left;border-color:#8a74ff">
+           <div style="text-align:center;font-weight:600;margin-bottom:6px;color:#a794ff">Pro</div>
+           <ul class="features" style="grid-template-columns:1fr">
+             <li><strong>Everything in Free, plus:</strong></li>
+             <li>All 8 effects (EQ, compressor, robot, distortion, telephone…)</li>
+             <li>Unlimited soundboard clips</li>
+             <li>Every future effect, included</li>
+           </ul>
+         </div>
+       </div>
 
        <h2>Pricing</h2>
-       <div class="pricing">
+       <div class="pricing" style="grid-template-columns:1fr 1fr 1fr">
+         <div class="card">
+           <div>Free</div>
+           <div class="price">£0<span> forever</span></div>
+           <a class="btn ghost" href="/download">Download</a>
+         </div>
          <div class="card" style="border-color:#8a74ff">
-           <div>Lifetime <span style="color:#5fd18a;font-size:0.8rem">· best value</span></div>
+           <div>Pro Lifetime <span style="color:#5fd18a;font-size:0.8rem">· best value</span></div>
            <div class="price">£10<span> once</span></div>
            <a class="btn" href="/buy?plan=life">Buy lifetime</a>
          </div>
          ${monthlyBtn}
        </div>
-       <p class="muted">Secure checkout via Mollie (card, PayPal &amp; more). After paying you get a
-       license key - paste it into the app and you're in. Keep it safe for reinstalls.</p>
+       <p class="muted">Start free, upgrade whenever. Secure checkout via Mollie (card, PayPal &amp; more).
+       After paying you get a Pro key - paste it into the app and everything unlocks. Keep it safe for reinstalls.</p>
 
        <h2>Installing (30 seconds)</h2>
        <div class="card" style="text-align:left">

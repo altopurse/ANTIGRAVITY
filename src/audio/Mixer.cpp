@@ -1,4 +1,5 @@
 #include "Mixer.h"
+#include "license/Entitlement.h"
 #include <algorithm>
 #include <iostream>
 
@@ -77,6 +78,17 @@ std::shared_ptr<SoundBoardClip> Mixer::loadClip(const std::string& path, const s
 void Mixer::playClip(std::shared_ptr<SoundBoardClip> clip) {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!clip || !clip->isLoaded) return;
+
+    // Free-tier cap (engine-level, the real enforcement): only the first
+    // FREE_CLIP_LIMIT clips in the board are playable without the unlimited
+    // feature. Clips beyond that still load (a lapsed paid user keeps their
+    // library) but silently won't fire until they upgrade. Every play route -
+    // UI buttons, hotkeys, quick-keys 1-9 - funnels through here.
+    if (!ent::hasFeature(ent::FEAT_UNLIMITED_CLIPS)) {
+        int idx = -1, i = 0;
+        for (auto& c : m_clips) { if (c == clip) { idx = i; break; } ++i; }
+        if (idx < 0 || idx >= ent::FREE_CLIP_LIMIT) return;
+    }
 
     // Seek back to start and play
     ma_decoder_seek_to_pcm_frame(&clip->decoder, 0);
