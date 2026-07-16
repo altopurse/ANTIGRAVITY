@@ -731,57 +731,73 @@ function signatureValid(key) {
 
 // Per-license usage profile ("user profile" keyed by license, no accounts
 // needed). Fire-and-forget: analytics must never delay or fail a verify.
+//
+// The profile/install writes here are analytics, not correctness - the app
+// re-verifies on every launch (and periodically), so writing ~7 commands each
+// time is the biggest recurring Redis cost. They're throttled to once per
+// device per day via a SET NX EX guard: repeat verifies within a day cost just
+// that one guard command instead of the full write burst. touchPresence stays
+// every verify so the "recently active" list remains live.
 function recordProfile(req, key, device) {
   if (!bindingEnabled) return;
-  const now = new Date().toISOString();
-  const ip = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "")
-    .split(",")[0].trim();
-  const country = String(req.headers["cf-ipcountry"] || req.headers["x-vercel-ip-country"] || "");
-  const fields = [
-    "lastSeen", now,
-    "lastDevice", device || "",
-    "os", String(req.query.os || "").slice(0, 64),
-    "appVersion", String(req.query.v || "").slice(0, 32),
-    "ip", ip.slice(0, 64),
-  ];
-  if (country) fields.push("country", country.slice(0, 8));
-  touchPresence("k:" + key); // app activity feeds the same recent-active list
-  Promise.all([
-    redis(["HSET", "profile:" + key, ...fields]),
-    redis(["HSETNX", "profile:" + key, "firstSeen", now]),
-    redis(["HINCRBY", "profile:" + key, "checks", 1]),
-  ]).catch((err) => console.error("profile write failed:", err.message));
+  touchPresence("k:" + key); // app activity feeds the same recent-active list (live)
 
-  // Per-machine install record: which PCs the app lives on, where, and whether
-  // it's still there. Each verify refreshes lastSeen and clears any prior
-  // "uninstalled" flag (covers a reinstall on the same PC).
-  const os = String(req.query.os || "").slice(0, 64);
-  const ver = String(req.query.v || "").slice(0, 32);
-  const hash = String(req.query.h || "").slice(0, 32);
-  // Tamper flag: only meaningful once EXPECTED_HASH is set (per release) in
-  // Render. A reported hash that differs is a modified/patched binary.
-  const tampered = EXPECTED_HASH && hash && hash !== EXPECTED_HASH ? "1" : "0";
-  Promise.all([
-    redis(["SADD", "installs", device]),
-    redis(["HSET", "install:" + device,
-      "key", key, "os", os, "version", ver, "hash", hash, "tampered", tampered,
-      "country", country.slice(0, 8), "lastSeen", now, "uninstalled", "0"]),
-    redis(["HSETNX", "install:" + device, "firstSeen", now]),
-  ]).catch((err) => console.error("install record failed:", err.message));
+  // Once-per-day-per-device gate. "OK" only for the first verify of the day.
+  redis(["SET", "seen:" + device, "1", "NX", "EX", "86400"]).then((fresh) => {
+    if (!fresh) return; // already recorded a profile/install for this device today
 
-  // "When do they first use a key" - count each key's first-ever activation
-  // once, and mark the linked visitor (if we know them) as converted.
-  redis(["SADD", "stats:activated", key]).then(async (added) => {
-    if (added !== 1) return;
-    await redis(["INCR", "stats:event:key_activated"]);
-    const vid = await redis(["HGET", "keyvisitor:" + key, "vid"]);
-    if (vid) {
-      await redis(["HSET", "visitor:" + vid, "activatedAt", now, "activatedOs", String(req.query.os || "").slice(0, 64)]);
-    }
-    const entry = JSON.stringify({ at: now, event: "key_activated", key, os: String(req.query.os || "").slice(0, 64) });
-    await redis(["LPUSH", "analytics:events", entry]);
-    await redis(["LTRIM", "analytics:events", "0", "299"]);
-  }).catch((err) => console.error("activation track failed:", err.message));
+    const now = new Date().toISOString();
+    const ip = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "")
+      .split(",")[0].trim();
+    const country = String(req.headers["cf-ipcountry"] || req.headers["x-vercel-ip-country"] || "");
+    const fields = [
+      "lastSeen", now,
+      "lastDevice", device || "",
+      "os", String(req.query.os || "").slice(0, 64),
+      "appVersion", String(req.query.v || "").slice(0, 32),
+      "ip", ip.slice(0, 64),
+    ];
+    if (country) fields.push("country", country.slice(0, 8));
+    Promise.all([
+      redis(["HSET", "profile:" + key, ...fields]),
+      redis(["HSETNX", "profile:" + key, "firstSeen", now]),
+      redis(["HINCRBY", "profile:" + key, "checks", 1]), // now counts active days
+    ]).catch((err) => console.error("profile write failed:", err.message));
+
+    // Per-machine install record: which PCs the app lives on, where, and whether
+    // it's still there. Refreshes lastSeen and clears any prior "uninstalled"
+    // flag (covers a reinstall on the same PC).
+    const os = String(req.query.os || "").slice(0, 64);
+    const ver = String(req.query.v || "").slice(0, 32);
+    const hash = String(req.query.h || "").slice(0, 32);
+    // Tamper flag: only meaningful once EXPECTED_HASH is set (per release) in
+    // Render. A reported hash that differs is a modified/patched binary.
+    const tampered = EXPECTED_HASH && hash && hash !== EXPECTED_HASH ? "1" : "0";
+    Promise.all([
+      redis(["SADD", "installs", device]),
+      redis(["HSET", "install:" + device,
+        "key", key, "os", os, "version", ver, "hash", hash, "tampered", tampered,
+        "country", country.slice(0, 8), "lastSeen", now, "uninstalled", "0"]),
+      redis(["HSETNX", "install:" + device, "firstSeen", now]),
+    ]).catch((err) => console.error("install record failed:", err.message));
+
+    // "When do they first use a key" - count each key's first-ever activation
+    // once, and mark the linked visitor (if we know them) as converted. The
+    // SADD is idempotent (added===1 only the first ever time), so gating it
+    // behind the daily throttle keeps it correct while saving a command per
+    // repeat verify.
+    redis(["SADD", "stats:activated", key]).then(async (added) => {
+      if (added !== 1) return;
+      await redis(["INCR", "stats:event:key_activated"]);
+      const vid = await redis(["HGET", "keyvisitor:" + key, "vid"]);
+      if (vid) {
+        await redis(["HSET", "visitor:" + vid, "activatedAt", now, "activatedOs", String(req.query.os || "").slice(0, 64)]);
+      }
+      const entry = JSON.stringify({ at: now, event: "key_activated", key, os: String(req.query.os || "").slice(0, 64) });
+      await redis(["LPUSH", "analytics:events", entry]);
+      await redis(["LTRIM", "analytics:events", "0", "299"]);
+    }).catch((err) => console.error("activation track failed:", err.message));
+  }).catch((err) => console.error("profile throttle failed:", err.message));
 }
 
 // Called by the desktop app. Query: key (required), device (fingerprint),
