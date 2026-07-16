@@ -15,6 +15,20 @@ struct SoundBoardClip {
     bool loop = false;
     int hotkey = -1; // virtual key code, e.g. VK_F1
 
+    // Trim / region playback: only play the slice [startSec, endSec) of the
+    // file (great for grabbing one moment out of a long track). endSec <= 0
+    // means "to the end of the file". When loop is on, the region loops.
+    // The *Frame / durationSec fields are derived (recomputeRegion) from these
+    // seconds + the current sample rate, and are what the audio callback reads.
+    float startSec = 0.0f;
+    float endSec = 0.0f;      // 0 = end of file
+    float durationSec = 0.0f; // full file length (for the UI), set on load
+
+    ma_uint64 lengthFrames = 0; // full file length in frames at engine rate
+    ma_uint64 startFrame = 0;   // region start (derived)
+    ma_uint64 endFrame = 0;     // region end, exclusive (derived; 0 until loaded)
+    ma_uint64 playCursor = 0;   // current playhead within the file (frames)
+
     // Click-free stopping: stop requests ramp the gain to zero over ~30ms
     // inside the audio callback instead of cutting the waveform mid-sample.
     bool fadingOut = false;
@@ -38,6 +52,11 @@ public:
     // Load a clip into the soundboard
     std::shared_ptr<SoundBoardClip> loadClip(const std::string& path, const std::string& name);
     void playClip(std::shared_ptr<SoundBoardClip> clip);
+
+    // Set the play region (in seconds; endSec <= 0 means "to end of file").
+    // Recomputes the derived frame bounds under the lock so the audio thread
+    // sees a consistent region. Safe to call while the clip is playing.
+    void setTrim(std::shared_ptr<SoundBoardClip> clip, float startSec, float endSec);
     // fade=true ramps out over ~30ms (click-free); false cuts immediately
     void stopClip(std::shared_ptr<SoundBoardClip> clip, bool fade = true);
     void stopAll(bool fade = true);
@@ -52,6 +71,11 @@ public:
     bool m_duckingEnabled = true;
 
 private:
+    // Recompute startFrame/endFrame/durationSec from startSec/endSec + the
+    // current sample rate and the clip's cached lengthFrames. Caller must hold
+    // m_mutex (or be in a context where the clip isn't being read by audio).
+    void recomputeRegion(const std::shared_ptr<SoundBoardClip>& clip);
+
     std::vector<std::shared_ptr<SoundBoardClip>> m_clips;
     std::mutex m_mutex;
     double m_sampleRate = 48000.0;

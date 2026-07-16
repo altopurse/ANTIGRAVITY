@@ -58,7 +58,9 @@ bool AppConfig::save() const {
         j << "    {\"path\": \"" << jsonEscape(c.path) << "\", "
           << "\"hotkey\": " << c.hotkey << ", "
           << "\"volume\": " << c.volume << ", "
-          << "\"loop\": " << (c.loop ? "true" : "false") << "}"
+          << "\"loop\": " << (c.loop ? "true" : "false") << ", "
+          << "\"startSec\": " << c.startSec << ", "
+          << "\"endSec\": " << c.endSec << "}"
           << (i + 1 < clips.size() ? "," : "") << "\n";
     }
     j << "  ]\n";
@@ -162,6 +164,8 @@ bool AppConfig::load() {
             c.hotkey = toInt(extractValue(json, "hotkey", objStart, objEnd + 1), -1);
             c.volume = toFloat(extractValue(json, "volume", objStart, objEnd + 1), 0.8f);
             c.loop   = toBool(extractValue(json, "loop", objStart, objEnd + 1), false);
+            c.startSec = toFloat(extractValue(json, "startSec", objStart, objEnd + 1), 0.0f);
+            c.endSec   = toFloat(extractValue(json, "endSec", objStart, objEnd + 1), 0.0f);
             if (!c.path.empty()) clips.push_back(c);
 
             p = objEnd + 1;

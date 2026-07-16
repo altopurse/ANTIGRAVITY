@@ -152,6 +152,8 @@ void UIController::captureConfig(AppConfig& cfg) const {
         c.hotkey = clip->hotkey;
         c.volume = clip->volume;
         c.loop = clip->loop;
+        c.startSec = clip->startSec;
+        c.endSec = clip->endSec;
         cfg.clips.push_back(c);
     }
 
@@ -1292,7 +1294,7 @@ void UIController::drawSoundboardPanel() {
         bool clipLocked = !m_isPro && static_cast<int>(i) >= ent::FREE_CLIP_LIMIT;
         ImGui::PushStyleColor(ImGuiCol_ChildBg, clipLocked ? theme::Bg : theme::PanelAlt);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(10.0f), S(9.0f)));
-        ImGui::BeginChild("ClipCard", ImVec2(cellW, S(172.0f)),
+        ImGui::BeginChild("ClipCard", ImVec2(cellW, S(200.0f)),
                           ImGuiChildFlags_Border,
                           ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_AlwaysUseWindowPadding);
 
@@ -1352,7 +1354,73 @@ void UIController::drawSoundboardPanel() {
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Left-click to bind key. Right-click card/button to clear.");
         }
+
+        // Trim: play only a slice of a (often long) file. With Loop on, the
+        // slice repeats. Not gated - available on free and Pro clips alike.
+        float dur = clip->durationSec;
+        bool trimmed = clip->startSec > 0.001f ||
+                       (clip->endSec > 0.001f && (dur <= 0.0f || clip->endSec < dur - 0.001f));
+        char trimLabel[64];
+        if (trimmed) {
+            float shownEnd = (clip->endSec <= 0.0f) ? dur : clip->endSec;
+            snprintf(trimLabel, sizeof(trimLabel), "Trim %.1f-%.1fs##trim", clip->startSec, shownEnd);
+        } else {
+            snprintf(trimLabel, sizeof(trimLabel), "Trim: full clip##trim");
+        }
+        if (widgets::ColoredButton(trimLabel, ImVec2(-FLT_MIN, S(22.0f)),
+                                   trimmed ? theme::AccentLo : theme::PanelHover)) {
+            ImGui::OpenPopup("TrimPopup");
+        }
+        ImGui::SetItemTooltip("Choose which part of the file plays.\nTurn on Loop to repeat just that slice.");
         ImGui::EndDisabled();
+
+        if (ImGui::BeginPopup("TrimPopup")) {
+            ImGui::PushFont(theme::FontBold);
+            ImGui::TextUnformatted(clip->name.c_str());
+            ImGui::PopFont();
+            ImGui::TextColored(theme::TextDim, "Length: %.1f s", dur);
+            ImGui::Spacing();
+
+            float startS = clip->startSec;
+            float endS = (clip->endSec <= 0.0f) ? dur : clip->endSec;
+            bool changed = false, released = false;
+            ImGui::SetNextItemWidth(S(240.0f));
+            if (ImGui::SliderFloat("Start (s)", &startS, 0.0f, dur > 0.0f ? dur : 1.0f, "%.2f")) changed = true;
+            if (ImGui::IsItemDeactivatedAfterEdit()) released = true;
+            ImGui::SetNextItemWidth(S(240.0f));
+            if (ImGui::SliderFloat("End (s)", &endS, 0.0f, dur > 0.0f ? dur : 1.0f, "%.2f")) changed = true;
+            if (ImGui::IsItemDeactivatedAfterEdit()) released = true;
+
+            if (changed) {
+                if (startS < 0.0f) startS = 0.0f;
+                if (endS < startS + 0.05f) endS = startS + 0.05f; // keep a minimum slice
+                if (dur > 0.0f && endS > dur) endS = dur;
+                // "at/after the end" is stored as 0 so it tracks the true file end
+                float storeEnd = (dur > 0.0f && endS >= dur - 0.001f) ? 0.0f : endS;
+                m_soundboard->getMixer()->setTrim(clip, startS, storeEnd); // live (cheap)
+            }
+            if (released) persistConfig(); // write config.json only when the drag ends
+
+            ImGui::Spacing();
+            if (ImGui::Button("Full clip")) {
+                m_soundboard->getMixer()->setTrim(clip, 0.0f, 0.0f);
+                persistConfig();
+            }
+            ImGui::SameLine();
+            if (widgets::ColoredButton("Preview", ImVec2(0, 0), theme::Accent)) {
+                m_soundboard->playClip(clip);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Stop")) {
+                m_soundboard->stopClip(clip);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
+            ImGui::PushFont(theme::FontSmall);
+            ImGui::TextColored(theme::TextDim, "Tip: enable Loop to repeat this slice.");
+            ImGui::PopFont();
+            ImGui::EndPopup();
+        }
 
         // Right click for hotkey/removal actions
         if (ImGui::BeginPopupContextWindow()) {

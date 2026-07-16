@@ -138,6 +138,8 @@ int main(int, char**) {
                     clip->hotkey = saved.hotkey;
                     clip->volume = saved.volume;
                     clip->loop = saved.loop;
+                    // Restore the trim region (recomputes frame bounds)
+                    mixer->setTrim(clip, saved.startSec, saved.endSec);
                     break;
                 }
             }

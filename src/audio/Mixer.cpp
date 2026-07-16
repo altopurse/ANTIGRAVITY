@@ -5,6 +5,38 @@
 
 Mixer::Mixer() {}
 
+void Mixer::recomputeRegion(const std::shared_ptr<SoundBoardClip>& clip) {
+    // Refresh the cached length (frames -> seconds at the current rate)
+    ma_uint64 len = 0;
+    if (clip->isLoaded && ma_decoder_get_length_in_pcm_frames(&clip->decoder, &len) == MA_SUCCESS) {
+        clip->lengthFrames = len;
+    }
+    clip->durationSec = (m_sampleRate > 0.0)
+        ? static_cast<float>(clip->lengthFrames / m_sampleRate) : 0.0f;
+
+    ma_uint64 total = clip->lengthFrames;
+    // Start frame from startSec, clamped into the file
+    double startF = static_cast<double>(clip->startSec) * m_sampleRate;
+    if (startF < 0.0) startF = 0.0;
+    ma_uint64 start = static_cast<ma_uint64>(startF);
+    if (total > 0 && start >= total) start = (total > 1) ? total - 1 : 0;
+
+    // End frame: endSec <= 0 (or past the file) means "to the end"
+    ma_uint64 end;
+    if (clip->endSec <= 0.0f) {
+        end = total;
+    } else {
+        double endF = static_cast<double>(clip->endSec) * m_sampleRate;
+        end = static_cast<ma_uint64>(endF);
+        if (total > 0 && end > total) end = total;
+    }
+    // Guarantee a non-empty region [start, end)
+    if (end <= start) end = (total > start) ? total : start + 1;
+
+    clip->startFrame = start;
+    clip->endFrame = end;
+}
+
 Mixer::~Mixer() {
     std::lock_guard<std::mutex> lock(m_mutex);
     for (auto& clip : m_clips) {
@@ -33,6 +65,9 @@ void Mixer::prepare(double sampleRate, int numChannels) {
             if (result != MA_SUCCESS) {
                 clip->isLoaded = false;
                 clip->isPlaying = false;
+            } else {
+                // Frame counts are rate-dependent: recompute the region bounds
+                recomputeRegion(clip);
             }
         }
     }
@@ -65,6 +100,7 @@ std::shared_ptr<SoundBoardClip> Mixer::loadClip(const std::string& path, const s
         clip->isPlaying = false;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
+            recomputeRegion(clip); // full-file region until the user trims it
             m_clips.push_back(clip);
         }
         std::cout << "Mixer: Loaded clip successfully: " << name << std::endl;
@@ -90,11 +126,28 @@ void Mixer::playClip(std::shared_ptr<SoundBoardClip> clip) {
         if (idx < 0 || idx >= ent::FREE_CLIP_LIMIT) return;
     }
 
-    // Seek back to start and play
-    ma_decoder_seek_to_pcm_frame(&clip->decoder, 0);
+    // Seek to the region start (the trim in-point) and play
+    ma_decoder_seek_to_pcm_frame(&clip->decoder, clip->startFrame);
+    clip->playCursor = clip->startFrame;
     clip->isPlaying = true;
     clip->fadingOut = false;
     clip->fadeGain = 1.0f;
+}
+
+void Mixer::setTrim(std::shared_ptr<SoundBoardClip> clip, float startSec, float endSec) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!clip) return;
+    if (startSec < 0.0f) startSec = 0.0f;
+    clip->startSec = startSec;
+    clip->endSec = endSec; // <= 0 means "to end"
+    recomputeRegion(clip);
+    // If it's mid-play and the new region no longer contains the playhead,
+    // snap back to the region start so playback stays inside the slice.
+    if (clip->isPlaying &&
+        (clip->playCursor < clip->startFrame || clip->playCursor >= clip->endFrame)) {
+        ma_decoder_seek_to_pcm_frame(&clip->decoder, clip->startFrame);
+        clip->playCursor = clip->startFrame;
+    }
 }
 
 void Mixer::stopClip(std::shared_ptr<SoundBoardClip> clip, bool fade) {
@@ -167,17 +220,25 @@ bool Mixer::processAndMix(float* outBuffer, size_t frameCount, int channels, flo
         int consecutiveZeroReads = 0;
 
         while (totalFramesRead < frameCount) {
+            // Never read past the region's out-point (endFrame). Cap the read
+            // to whatever is left of the slice before the file's own EOF.
+            ma_uint64 framesLeftInRegion = (clip->endFrame > clip->playCursor)
+                ? (clip->endFrame - clip->playCursor) : 0;
             ma_uint64 framesToRead = frameCount - totalFramesRead;
+            if (framesToRead > framesLeftInRegion) framesToRead = framesLeftInRegion;
+
             ma_uint64 framesRead = 0;
-
-            ma_result res = ma_decoder_read_pcm_frames(
-                &clip->decoder,
-                m_tempBuffer.data() + (totalFramesRead * channels),
-                framesToRead,
-                &framesRead
-            );
-
-            totalFramesRead += framesRead;
+            ma_result res = MA_SUCCESS;
+            if (framesToRead > 0) {
+                res = ma_decoder_read_pcm_frames(
+                    &clip->decoder,
+                    m_tempBuffer.data() + (totalFramesRead * channels),
+                    framesToRead,
+                    &framesRead
+                );
+                totalFramesRead += framesRead;
+                clip->playCursor += framesRead;
+            }
 
             if (framesRead == 0) {
                 // Guard against a stuck/empty decoder spinning forever
@@ -189,12 +250,15 @@ bool Mixer::processAndMix(float* outBuffer, size_t frameCount, int channels, flo
                 consecutiveZeroReads = 0;
             }
 
-            if (res != MA_SUCCESS || framesRead < framesToRead) {
+            // Reached the region end (or the file's EOF, whichever came first)?
+            bool hitRegionEnd = (clip->playCursor >= clip->endFrame);
+            if (hitRegionEnd || res != MA_SUCCESS || framesRead < framesToRead) {
                 if (clip->loop) {
-                    // Loop: seek back to 0 and continue reading
-                    ma_decoder_seek_to_pcm_frame(&clip->decoder, 0);
+                    // Loop the selected slice: seek back to the in-point
+                    ma_decoder_seek_to_pcm_frame(&clip->decoder, clip->startFrame);
+                    clip->playCursor = clip->startFrame;
                 } else {
-                    // Stop playing once file finishes
+                    // One-shot: stop once the slice finishes
                     clip->isPlaying = false;
                     break;
                 }

@@ -13,6 +13,8 @@ struct ClipConfig {
     int hotkey = -1;
     float volume = 0.8f;
     bool loop = false;
+    float startSec = 0.0f; // trim in-point (seconds)
+    float endSec = 0.0f;   // trim out-point (seconds); 0 = end of file
 };
 
 class AppConfig {
