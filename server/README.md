@@ -12,6 +12,12 @@ Extra optional env vars (beyond the ones below):
 - `ADMIN_SECRET` — enables `/admin` (dashboard login password) and `/api/admin/*`
 - `LATEST_VERSION` + `DOWNLOAD_URL` — power the in-app "update available"
   banner via `/api/version`; bump them when you publish a new build
+- `ANALYTICS_SAMPLE` — `0`–`1` (default `1`). Fraction of page views that get
+  the full per-visitor tracking; the rest only bump cheap aggregate counters.
+  Lower it (e.g. `0.1`) if you approach the Upstash free-tier monthly request
+  limit — page-view tracking is by far the biggest Redis spender. Purchases,
+  downloads and key activations are never sampled. No redeploy needed to change
+  it beyond Render restarting the service.
 
 ## Deploy on Render
 

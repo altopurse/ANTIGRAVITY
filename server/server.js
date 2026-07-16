@@ -57,6 +57,14 @@ const EXPECTED_HASH = process.env.EXPECTED_HASH || "";
 // set, the server falls back to signature-only checks so it still runs.
 const { UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN } = process.env;
 const DEVICE_LIMIT = parseInt(process.env.DEVICE_LIMIT || "2", 10);
+
+// Analytics throttle. Page-view tracking is the biggest Redis spender (many
+// commands per view), and the Upstash free tier caps monthly requests. This
+// fraction (0..1) of page views get the full per-visitor treatment; the rest
+// only bump a couple of cheap aggregate counters. Lower it in Render (no
+// deploy needed) if you approach the quota; 1 = track every view in full.
+// Purchases/downloads/activations are NEVER sampled - only page views are.
+const ANALYTICS_SAMPLE = Math.max(0, Math.min(1, Number(process.env.ANALYTICS_SAMPLE || "1")));
 const bindingEnabled = !!(UPSTASH_REDIS_REST_URL && UPSTASH_REDIS_REST_TOKEN);
 
 for (const name of ["MOLLIE_API_KEY", "LICENSE_SECRET", "BASE_URL"]) {
@@ -153,16 +161,22 @@ function touchPresence(member) {
 }
 
 // Records a page view + updates the visitor's profile. Called on real pages.
+//
+// Redis-cost split so the Upstash free-tier quota lasts far longer:
+//   - Aggregate KPIs (totals, uniques, page/ref breakdown) always run - cheap,
+//     and they're what actually matters. ~5 commands.
+//   - The expensive per-visitor profile + journey (~7 commands, powering the
+//     individual visitor drill-down) runs on an ANALYTICS_SAMPLE fraction only.
+// So at ANALYTICS_SAMPLE=1 behavior is unchanged; at 0.1 a page view costs ~5
+// commands instead of ~14, ~3x more traffic per quota.
 function trackView(req, res, pageName) {
   if (!bindingEnabled) return "";
   const vid = visitorId(req, res);
-  touchPresence("v:" + vid);
   const d = today();
-  const country = clientCountry(req);
   const ref = refHost(req);
-  const now = new Date().toISOString();
-  const ua = String(req.headers["user-agent"] || "").slice(0, 120);
+  const country = clientCountry(req);
 
+  // Always: cheap aggregate counters (the headline dashboard numbers)
   Promise.all([
     redis(["INCR", "stats:views:total"]),
     redis(["INCR", "stats:views:" + d]),
@@ -170,16 +184,23 @@ function trackView(req, res, pageName) {
     redis(["PFADD", "stats:uniq:" + d, vid]),
     redis(["HINCRBY", "stats:page", pageName, 1]),
     redis(["HINCRBY", "stats:ref", ref, 1]),
-    country ? redis(["HINCRBY", "stats:country", country, 1]) : Promise.resolve(),
-    // Per-visitor profile
-    redis(["HSET", "visitor:" + vid, "lastSeen", now, "country", country, "ref", ref, "ua", ua]),
-    redis(["HSETNX", "visitor:" + vid, "firstSeen", now]),
-    redis(["HINCRBY", "visitor:" + vid, "views", 1]),
-    redis(["SADD", "visitors", vid]),
-    // Ordered per-visitor journey (newest first), capped
-    redis(["LPUSH", "journey:" + vid, JSON.stringify({ at: now, t: "view", p: pageName })]),
-    redis(["LTRIM", "journey:" + vid, "0", "49"]),
-  ]).catch((e) => console.error("trackView failed:", e.message));
+  ]).catch((e) => console.error("trackView(agg) failed:", e.message));
+
+  // Sampled: presence + full per-visitor profile + journey timeline
+  if (Math.random() < ANALYTICS_SAMPLE) {
+    touchPresence("v:" + vid);
+    const now = new Date().toISOString();
+    const ua = String(req.headers["user-agent"] || "").slice(0, 120);
+    Promise.all([
+      country ? redis(["HINCRBY", "stats:country", country, 1]) : Promise.resolve(),
+      redis(["HSET", "visitor:" + vid, "lastSeen", now, "country", country, "ref", ref, "ua", ua]),
+      redis(["HSETNX", "visitor:" + vid, "firstSeen", now]),
+      redis(["HINCRBY", "visitor:" + vid, "views", 1]),
+      redis(["SADD", "visitors", vid]),
+      redis(["LPUSH", "journey:" + vid, JSON.stringify({ at: now, t: "view", p: pageName })]),
+      redis(["LTRIM", "journey:" + vid, "0", "49"]),
+    ]).catch((e) => console.error("trackView(detail) failed:", e.message));
+  }
   return vid;
 }
 
@@ -1520,7 +1541,7 @@ app.get("/admin", async (req, res) => {
     // paused/expired free DB also shows here.
     const msg = esc(err && err.message ? err.message : String(err));
     let hint = "";
-    if (/\b429\b/.test(msg))                    hint = "Upstash command limit reached (free tier). It resets monthly, or upgrade the Upstash plan.";
+    if (/\b429\b/.test(msg))                    hint = "Upstash command limit reached (free tier). Lower ANALYTICS_SAMPLE in Render (e.g. 0.1) to cut usage, wait for the monthly reset, or upgrade the Upstash plan.";
     else if (/\b40[13]\b/.test(msg))            hint = "Upstash rejected the token - update UPSTASH_REDIS_REST_TOKEN in Render and redeploy.";
     else if (/fetch|ENOTFOUND|ECONN/.test(msg)) hint = "Could not reach Upstash - check the DB isn't paused/deleted and UPSTASH_REDIS_REST_URL is correct.";
     res.status(500).send(page("Error", `<h1>Dashboard temporarily unavailable</h1>
