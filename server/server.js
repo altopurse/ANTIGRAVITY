@@ -1511,8 +1511,25 @@ app.get("/admin", async (req, res) => {
       <style>td,th{padding:8px 10px;border-bottom:1px solid #2e2e3e} td a{color:#f47272} .muted{color:#9a9aa5}</style>`,
       { wide: true }));
   } catch (err) {
-    console.error(err);
-    res.status(500).send(page("Error", `<h1>Redis error</h1>`));
+    console.error("admin dashboard failed:", err);
+    const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    // Admin-only page: surfacing the real cause (HTTP status from Upstash) is
+    // safe here and turns a dead-end "Redis error" into something diagnosable.
+    // A 429 = Upstash daily/monthly command limit hit; 401 = token rotated;
+    // paused/expired free DB also shows here.
+    const msg = esc(err && err.message ? err.message : String(err));
+    let hint = "";
+    if (/\b429\b/.test(msg))                    hint = "Upstash command limit reached (free tier). It resets monthly, or upgrade the Upstash plan.";
+    else if (/\b40[13]\b/.test(msg))            hint = "Upstash rejected the token - update UPSTASH_REDIS_REST_TOKEN in Render and redeploy.";
+    else if (/fetch|ENOTFOUND|ECONN/.test(msg)) hint = "Could not reach Upstash - check the DB isn't paused/deleted and UPSTASH_REDIS_REST_URL is correct.";
+    res.status(500).send(page("Error", `<h1>Dashboard temporarily unavailable</h1>
+      <p class="muted">A backend (Upstash Redis) call failed, so the dashboard couldn't load.
+      Your keys and licences are unaffected - this is only the analytics/admin view.</p>
+      ${hint ? `<div class="card" style="border-color:#f47272"><strong>Likely cause:</strong> ${esc(hint)}</div>` : ""}
+      <p class="muted" style="margin-top:16px">Details:</p>
+      <code class="key">${msg}</code>
+      <p style="margin-top:16px"><a class="btn ghost" href="/admin">Retry</a></p>`, { wide: true }));
   }
 });
 
