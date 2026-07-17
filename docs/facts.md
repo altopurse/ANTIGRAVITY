@@ -55,8 +55,10 @@ with reverb, pitch-shifting and a 2-clip soundboard; pay £10 once to unlock all
 
 ## Key features (Pro unless noted)
 
-- 8 real-time voice effects (pitch, EQ, compressor, reverb, robot, distortion,
-  telephone, noise gate)
+- 9 real-time voice effects (AI noise suppression, pitch, EQ, compressor,
+  reverb, robot, distortion, telephone, noise gate)
+- Auto-leveled output (makeup gain + look-ahead limiter) so your voice stays
+  clear and consistent and Discord's voice gate never cuts out (v2.5+)
 - One-click voice presets (Deep, Chipmunk, Robot, Telephone, Monster-style)
 - Built-in soundboard: global hotkeys, per-clip volume, loop, mic ducking,
   "stop all" hotkey, keys 1–9 quick-play

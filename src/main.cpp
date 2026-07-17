@@ -130,6 +130,8 @@ int main(int, char**) {
         audioEngine->setMonitorEnabled(config->monitorEnabled);
         audioEngine->setMonitorVolume(config->monitorVolume);
         audioEngine->setSoundboardMonitorVolume(config->soundboardMonitorVolume);
+        audioEngine->setOutputStageEnabled(config->outputStageEnabled);
+        audioEngine->setOutputGainDb(config->outputGainDb);
         mixer->m_duckingEnabled = config->duckingEnabled;
         mixer->m_duckingAmount = config->duckingAmount;
         soundboard->setStopAllHotkey(config->stopAllHotkey);

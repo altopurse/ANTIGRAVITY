@@ -2,6 +2,7 @@
 #include "miniaudio.h"
 #include "RingBuffer.h"
 #include "dsp/DSPGraph.h"
+#include "dsp/OutputLimiter.h"
 #include "audio/Mixer.h"
 #include <vector>
 #include <string>
@@ -55,6 +56,16 @@ public:
     // what everyone else hears.
     void setSoundboardMonitorVolume(float volume) { m_soundboardMonitorVolume = volume; }
     float getSoundboardMonitorVolume() const { return m_soundboardMonitorVolume; }
+
+    // Output stage (Primary Output only - what Discord/games hear). Makeup
+    // gain lifts the whole mix to a consistent level so Discord's voice gate
+    // stops dropping quiet parts; the look-ahead limiter tames peaks smoothly
+    // instead of hard-clipping. On by default - it's core output quality.
+    void setOutputStageEnabled(bool enabled) { m_outputStageEnabled = enabled; }
+    bool isOutputStageEnabled() const { return m_outputStageEnabled; }
+    void setOutputGainDb(float db) { m_outputGainDb = db; }
+    float getOutputGainDb() const { return m_outputGainDb; }
+    float getOutputGainReductionDb() const { return m_outputLimiter.gainReductionDb(); }
 
     // Low latency settings
     void setExclusiveMode(bool exclusive) { m_exclusiveMode = exclusive; }
@@ -120,6 +131,11 @@ private:
     std::atomic<float> m_soundboardMonitorVolume{1.0f};
     std::atomic<bool> m_exclusiveMode{false};
     std::atomic<int> m_bufferSizeMs{20}; // 20ms target latency (stable default, avoids crackling)
+
+    // Primary-output loudness stage
+    std::atomic<bool> m_outputStageEnabled{true};
+    std::atomic<float> m_outputGainDb{4.0f}; // gentle default lift; limiter guards peaks
+    OutputLimiter m_outputLimiter;
 
     double m_sampleRate = 48000.0;
     int m_channels = 2;

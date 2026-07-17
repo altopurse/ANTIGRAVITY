@@ -43,6 +43,8 @@ bool AppConfig::save() const {
     j << "  \"monitorDevice\": \"" << jsonEscape(monitorDevice) << "\",\n";
     j << "  \"bufferMs\": "        << bufferMs << ",\n";
     j << "  \"exclusiveMode\": "   << (exclusiveMode ? "true" : "false") << ",\n";
+    j << "  \"outputStageEnabled\": " << (outputStageEnabled ? "true" : "false") << ",\n";
+    j << "  \"outputGainDb\": "    << outputGainDb << ",\n";
     j << "  \"monitorEnabled\": "  << (monitorEnabled ? "true" : "false") << ",\n";
     j << "  \"monitorVolume\": "   << monitorVolume << ",\n";
     j << "  \"soundboardMonitorVolume\": " << soundboardMonitorVolume << ",\n";
@@ -139,6 +141,8 @@ bool AppConfig::load() {
     monitorDevice  = extractValue(json, "monitorDevice", 0, scalarEnd);
     bufferMs       = toInt(extractValue(json, "bufferMs", 0, scalarEnd), bufferMs);
     exclusiveMode  = toBool(extractValue(json, "exclusiveMode", 0, scalarEnd), exclusiveMode);
+    outputStageEnabled = toBool(extractValue(json, "outputStageEnabled", 0, scalarEnd), outputStageEnabled);
+    outputGainDb   = toFloat(extractValue(json, "outputGainDb", 0, scalarEnd), outputGainDb);
     monitorEnabled = toBool(extractValue(json, "monitorEnabled", 0, scalarEnd), monitorEnabled);
     monitorVolume  = toFloat(extractValue(json, "monitorVolume", 0, scalarEnd), monitorVolume);
     soundboardMonitorVolume = toFloat(extractValue(json, "soundboardMonitorVolume", 0, scalarEnd), soundboardMonitorVolume);

@@ -28,6 +28,11 @@ public:
     int bufferMs = 20;
     bool exclusiveMode = false;
 
+    // Output loudness stage (Primary Output / Discord feed): makeup gain +
+    // look-ahead limiter for consistent, gate-friendly loudness.
+    bool outputStageEnabled = true;
+    float outputGainDb = 4.0f;
+
     // Monitoring
     bool monitorEnabled = false;
     float monitorVolume = 0.7f;

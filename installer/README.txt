@@ -62,3 +62,10 @@ the Xiph.Org Foundation (https://github.com/xiph/rnnoise), used under
 the BSD 3-Clause license. Copyright (c) 2017-2024, Xiph.Org Foundation.
 Redistribution and use permitted under the terms of that license; see
 https://github.com/xiph/rnnoise/blob/main/COPYING for the full text.
+
+- Discord cutting out / can't be heard: the app now auto-levels the
+  Primary Output. In the app's OUTPUT section, keep "Auto-level output"
+  ON and raise "Output level (boost)" until people say you're clearly
+  audible (+4 to +9 dB is typical). Also set Discord's Input Sensitivity
+  to manual (drag the bar low) and turn OFF Discord's own noise
+  suppression so it doesn't fight the app.

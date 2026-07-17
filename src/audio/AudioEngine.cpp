@@ -142,6 +142,7 @@ bool AudioEngine::start(const ma_device_id* inputId, const ma_device_id* primary
     // Prepare processing graph and soundboard mixer
     m_dspGraph->prepare(m_sampleRate);
     m_mixer->prepare(m_sampleRate, m_channels);
+    m_outputLimiter.prepare(m_sampleRate, m_channels);
 
     // Size the monitor ring buffer from the actual period so large buffer
     // settings still leave room for the 3-period jitter cushion plus slack.
@@ -273,6 +274,15 @@ void AudioEngine::primaryCallback(void* pOutput, const void* pInput, ma_uint32 f
         m_soundboardScratch.resize(totalSamples);
     }
     bool soundboardActive = m_mixer->processAndMix(outBuf, frameCount, m_channels, m_soundboardScratch.data());
+
+    // 4b. Output loudness stage on the Primary Output (Discord/games feed):
+    // makeup gain for a consistent level Discord's gate won't drop, plus a
+    // look-ahead limiter that tames peaks smoothly instead of hard-clipping.
+    // Applied to outBuf only; the monitor path (step 6) keeps its own volume.
+    if (m_outputStageEnabled.load(std::memory_order_relaxed)) {
+        m_outputLimiter.process(outBuf, frameCount, m_channels,
+                                m_outputGainDb.load(std::memory_order_relaxed));
+    }
 
     // 4c. Anti-tamper dropout: the free tier is a legitimate, un-degraded
     // state now (enforcement is per-feature: premium effects bypass and

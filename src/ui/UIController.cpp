@@ -139,6 +139,8 @@ void UIController::captureConfig(AppConfig& cfg) const {
     cfg.monitorEnabled = m_audioEngine->isMonitorEnabled();
     cfg.monitorVolume = m_audioEngine->getMonitorVolume();
     cfg.soundboardMonitorVolume = m_audioEngine->getSoundboardMonitorVolume();
+    cfg.outputStageEnabled = m_audioEngine->isOutputStageEnabled();
+    cfg.outputGainDb = m_audioEngine->getOutputGainDb();
 
     auto mixer = m_soundboard->getMixer();
     cfg.duckingEnabled = mixer->m_duckingEnabled;
@@ -815,6 +817,43 @@ void UIController::drawSettingsPanel() {
     ImGui::SetItemTooltip("How loud soundboard clips are in YOUR headphones only.\n"
                           "Discord/games always get clips at each clip's own Volume slider,\n"
                           "full strength - this only turns them down for you.");
+
+    widgets::Divider();
+    widgets::SectionLabel("OUTPUT (WHAT DISCORD HEARS)");
+
+    bool outStage = m_audioEngine->isOutputStageEnabled();
+    if (widgets::ToggleSwitch("##outstage", &outStage, "Auto-level output (recommended)")) {
+        m_audioEngine->setOutputStageEnabled(outStage);
+    }
+    ImGui::SetItemTooltip("Keeps your voice and soundboard at a steady, clear loudness so\n"
+                          "Discord's voice detection doesn't cut out on quiet parts, and\n"
+                          "loud sounds don't distort. Turn off only if you run your own\n"
+                          "compressor/limiter elsewhere.");
+
+    ImGui::BeginDisabled(!outStage);
+    ImGui::PushFont(theme::FontSmall);
+    ImGui::TextColored(theme::TextDim, "Output level (boost)");
+    ImGui::PopFont();
+    float outGain = m_audioEngine->getOutputGainDb();
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::SliderFloat("##outgain", &outGain, 0.0f, 18.0f, "+%.1f dB")) {
+        m_audioEngine->setOutputGainDb(outGain);
+    }
+    ImGui::SetItemTooltip("Louder = easier for others to hear you and less chance Discord\n"
+                          "mutes quiet moments. The limiter stops it ever distorting, so\n"
+                          "raise this until people say you're clearly audible (try +4 to +9 dB).");
+
+    // Live gain-reduction readout: shows the limiter actually catching peaks.
+    if (m_audioEngine->isActive()) {
+        float gr = m_audioEngine->getOutputGainReductionDb();
+        ImGui::PushFont(theme::FontSmall);
+        if (gr > 0.3f)
+            ImGui::TextColored(theme::Accent, "Limiting peaks: -%.1f dB", gr);
+        else
+            ImGui::TextColored(theme::TextDim, "Peaks OK - no limiting needed");
+        ImGui::PopFont();
+    }
+    ImGui::EndDisabled();
 
     widgets::Divider();
     widgets::SectionLabel("LICENSE");
