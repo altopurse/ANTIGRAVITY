@@ -47,6 +47,12 @@ const PLANS = {
     label: "Monthly",
   },
 };
+// Streamer referral codes: viewers get lifetime at £8 (20% off); the streamer
+// earns £2.50 per lifetime sale. Promos never stack - with a code, monthly has
+// NO 80p intro (plain £3.00 from month one) and earns no commission, so a
+// commission can never exceed what the buyer actually paid.
+const REF_LIFE_PRICE = "8.00";
+const REF_COMMISSION = "2.50";
 // Each paid month grants 35 days so retries/bank delays never lock a payer out.
 const SUB_GRACE_MS = 35 * 24 * 3600 * 1000;
 
@@ -380,15 +386,40 @@ function page(title, bodyHtml, opts = {}) {
 
 // ---------- routes ----------
 
+// Normalizes a ?code= query value; returns "" unless the code exists in Redis.
+async function validRefCode(raw) {
+  const code = String(raw || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 16);
+  if (!code || !bindingEnabled) return "";
+  try {
+    return (await redis(["GET", "refcode:" + code])) ? code : "";
+  } catch { return ""; }
+}
+
 app.get("/", async (req, res) => {
   trackView(req, res, "home");
+  // Streamer referral code (?code=NAME): lifetime drops to £8, and the
+  // monthly card loses its 80p intro so promos never stack.
+  const refCode = await validRefCode(req.query.code);
+  const codeQS = refCode ? "&code=" + refCode : "";
+  const refBanner = refCode
+    ? `<div style="background:rgba(95,209,138,0.12);border:1px solid rgba(95,209,138,0.5);border-radius:10px;
+         padding:10px 16px;margin-bottom:16px;color:#5fd18a;font-weight:600">
+         Code ${refCode} applied - Pro Lifetime £8 instead of £10</div>`
+    : "";
   const monthlyBtn = bindingEnabled
-    ? `<div class="card">
+    ? (refCode
+      ? `<div class="card">
+           <div>Pro Monthly</div>
+           <div class="price">£3<span>/month</span></div>
+           <div class="muted" style="font-size:0.85rem;margin:-8px 0 12px">cancel anytime</div>
+           <a class="btn ghost" href="/buy?plan=monthly${codeQS}">Start monthly</a>
+         </div>`
+      : `<div class="card">
          <div>Pro Monthly <span style="color:#5fd18a;font-size:0.8rem">· try it cheap</span></div>
          <div class="price">£0.80<span> first month</span></div>
          <div class="muted" style="font-size:0.85rem;margin:-8px 0 12px">then £3/month · cancel anytime</div>
          <a class="btn ghost" href="/buy?plan=monthly">Start for £0.80</a>
-       </div>`
+       </div>`)
     : "";
 
   // Honest social proof: real download count, only shown once it's meaningful
@@ -404,7 +435,7 @@ app.get("/", async (req, res) => {
   res.send(
     page(
       "Antigravity Voice Engine - voice changer & soundboard",
-      `<div class="hero">
+      `${refBanner}<div class="hero">
          <div style="display:inline-block;background:rgba(138,116,255,0.14);border:1px solid rgba(138,116,255,0.45);
               color:#a794ff;border-radius:20px;padding:6px 16px;font-size:0.85rem;font-weight:600;margin-bottom:14px">
            NEW &middot; Now free to use - upgrade to Pro anytime &darr;</div>
@@ -482,8 +513,10 @@ app.get("/", async (req, res) => {
          </div>
          <div class="card" style="border-color:#8a74ff">
            <div>Pro Lifetime <span style="color:#5fd18a;font-size:0.8rem">· best value</span></div>
-           <div class="price">£10<span> once</span></div>
-           <a class="btn" href="/buy?plan=life">Buy lifetime</a>
+           ${refCode
+             ? `<div class="price">£8<span> once · <s style="color:#5a5a68">£10</s></span></div>`
+             : `<div class="price">£10<span> once</span></div>`}
+           <a class="btn" href="/buy?plan=life${codeQS}">Buy lifetime</a>
          </div>
          ${monthlyBtn}
        </div>
@@ -518,6 +551,7 @@ app.get("/", async (req, res) => {
        </div>
 
        <footer>Antigravity Voice Engine · <a href="/download" style="color:#5a5a68">Download</a>
+         · <a href="/partners" style="color:#5a5a68">Streamers</a>
          · <a href="/recover" style="color:#5a5a68">Lost key?</a>
          · <a href="/legal" style="color:#5a5a68">Terms &amp; Privacy</a></footer>`,
       { wide: true }
@@ -600,7 +634,8 @@ app.get("/buy", async (req, res, next) => {
          <a class="btn" href="/">← Back</a>`));
     }
     const plan = req.query.plan === "monthly" ? "monthly" : "life";
-    trackEvent(req, res, "buy_click", { plan });
+    const refCode = await validRefCode(req.query.code);
+    trackEvent(req, res, "buy_click", { plan, ...(refCode ? { code: refCode } : {}) });
 
     if (plan === "monthly" && !bindingEnabled) {
       return res.status(503).send(page("Unavailable",
@@ -611,12 +646,21 @@ app.get("/buy", async (req, res, next) => {
     // Carry the visitor id through Mollie so the completed purchase can be
     // tied back to the browsing session on /key (visit -> purchase link).
     const vid = visitorId(req, res);
+    // Referral pricing: lifetime £8 with a valid code. Monthly with a code is
+    // plain £3.00 first month (the 80p intro never stacks with the discount,
+    // and only lifetime sales earn the streamer commission).
+    let amount = PLANS[plan].amount;
+    if (refCode) {
+      amount = plan === "life"
+        ? { currency: "GBP", value: REF_LIFE_PRICE }
+        : PLANS.monthly.recurring;
+    }
     let paymentBody = {
-      amount: PLANS[plan].amount,
-      description: `${PRODUCT} (${PLANS[plan].label.toLowerCase()})`,
+      amount,
+      description: `${PRODUCT} (${PLANS[plan].label.toLowerCase()}${refCode ? ", code " + refCode : ""})`,
       redirectUrl: `${BASE_URL}/key`,
       webhookUrl: `${BASE_URL}/webhook`,
-      metadata: { vid, plan },
+      metadata: refCode ? { vid, plan, code: refCode } : { vid, plan },
     };
 
     if (plan === "monthly") {
@@ -688,6 +732,20 @@ async function activateSubscription(payment) {
   await redis(["SET", "cust:" + custId, key]); // recurring payments -> key
 }
 
+// Credits the referring streamer for a paid LIFETIME purchase made with their
+// code. Callers must gate this behind the stats:purchased SADD (first-seen
+// guard) so a payment can never be credited twice, whichever of /key or the
+// webhook sees it first. Monthly purchases never earn commission by design.
+async function creditReferral(payment) {
+  const meta = payment.metadata || {};
+  if (meta.plan !== "life" || !meta.code) return;
+  const pid = await redis(["GET", "refcode:" + String(meta.code)]);
+  if (!pid) return;
+  await redis(["HINCRBYFLOAT", "partner:" + pid, "owed", REF_COMMISSION]);
+  await redis(["HINCRBY", "partner:" + pid, "sales", 1]);
+  console.log(`Referral sale: code ${meta.code} +£${REF_COMMISSION}`);
+}
+
 app.get("/key", async (req, res, next) => {
   try {
     const pid = String(req.query.pid || "");
@@ -716,8 +774,11 @@ app.get("/key", async (req, res, next) => {
           if (added === 1) {
             await Promise.all([
               redis(["INCR", "stats:event:purchase"]),
-              redis(["INCRBYFLOAT", "stats:revenue", PLANS[plan] ? PLANS[plan].amount.value : "0"]),
+              // What the buyer actually paid (referral-discounted or full)
+              redis(["INCRBYFLOAT", "stats:revenue",
+                (payment.amount && payment.amount.value) || (PLANS[plan] ? PLANS[plan].amount.value : "0")]),
             ]);
+            await creditReferral(payment).catch((e) => console.error("referral credit failed:", e.message));
             if (vid) {
               await Promise.all([
                 redis(["HSET", "visitor:" + vid, "key", key, "plan", plan, "purchasedAt", new Date().toISOString()]),
@@ -812,6 +873,91 @@ app.get("/recover", async (req, res) => {
     console.error("recover failed:", err.message);
     res.status(500).send(page("Recover your key", `<h1>Recovery temporarily unavailable</h1>
       <p class="muted">Please try again in a few minutes.</p>${supportNote}`));
+  }
+});
+
+// ---------- streamer partner program ----------
+//
+// Inbound funnel: streamers apply here (linked from personal outreach emails
+// and the site footer). Deliberately NOT an automated mass-mailer - outreach
+// stays one-to-one from the owner's own mailbox (see docs/streamer-outreach.md);
+// this page just makes saying yes a one-click affair, and the admin approve
+// flow turns a request into keys + a pre-filled reply email.
+
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+app.get("/partners", (req, res) => {
+  trackView(req, res, "partners");
+  const form = bindingEnabled ? `
+    <form method="POST" action="/partners" style="display:grid;gap:10px">
+      <input required name="channel" maxlength="200" placeholder="Your channel link (Twitch / YouTube / TikTok / Kick)"
+        style="padding:12px;border-radius:8px;border:1px solid #2e2e3e;background:#1c1c26;color:#f2f2f7">
+      <input required type="email" name="email" maxlength="200" placeholder="Business email (where we send the keys)"
+        style="padding:12px;border-radius:8px;border:1px solid #2e2e3e;background:#1c1c26;color:#f2f2f7">
+      <input name="viewers" maxlength="40" placeholder="Typical live viewers (rough number, optional)"
+        style="padding:12px;border-radius:8px;border:1px solid #2e2e3e;background:#1c1c26;color:#f2f2f7">
+      <textarea name="message" maxlength="500" rows="3" placeholder="Anything else? (optional)"
+        style="padding:12px;border-radius:8px;border:1px solid #2e2e3e;background:#1c1c26;color:#f2f2f7;font-family:inherit"></textarea>
+      <button type="submit">Request partner keys</button>
+    </form>`
+    : `<p class="muted">Applications are briefly offline - email us via the address on our checkout instead.</p>`;
+
+  res.send(page("Partner program - Antigravity Voice Engine", `
+    <h1>Streamer partner program</h1>
+    <p class="muted">Use Antigravity on stream, give your viewers free Pro keys. No contracts, no
+    scripts to read, nothing to pay - ever.</p>
+    <div class="card" style="text-align:left;margin:18px 0">
+      <ul class="features" style="grid-template-columns:1fr">
+        <li><strong>You get a free lifetime Pro key</strong> - every effect, forever.</li>
+        <li><strong>Your viewers get 10 one-month Pro keys</strong> to give away however you like
+            (chat drops, subs, contests - your call).</li>
+        <li><strong>Your creator code earns you £2.50 per sale</strong> - viewers who buy through
+            your link get lifetime Pro for £8 instead of £10, and we pay you out by PayPal
+            (£20 minimum, no upper limit).</li>
+        <li>No obligations: use it on stream if you enjoy it, that's the whole deal. A shout-out
+            or a link in your description is appreciated, never required.</li>
+      </ul>
+      <p class="muted" style="font-size:0.85rem;margin-top:10px">The fine print: commission is earned on
+      lifetime purchases made with your code; the discount and the £0.80 monthly intro don't stack.
+      When you mention your code or link, UK advertising rules require you to disclose the
+      partnership (a simple #ad is enough). Payouts monthly via PayPal once you're over £20.</p>
+    </div>
+    ${form}
+    <p class="muted" style="margin-top:16px">We review every request by hand and reply by email,
+    usually within a couple of days. <a href="/" style="color:#8a74ff">What is Antigravity?</a></p>`));
+});
+
+app.post("/partners", async (req, res) => {
+  if (!rateAllow("partners", req, 3, 60 * 60 * 1000)) {
+    return res.status(429).send(page("Slow down", `<h1>Too many requests</h1>
+      <p class="muted">Please wait a while and try again.</p>`));
+  }
+  if (!bindingEnabled) return res.redirect("/partners");
+
+  const channel = String(req.body.channel || "").trim().slice(0, 200);
+  const email = String(req.body.email || "").trim().slice(0, 200);
+  const viewers = String(req.body.viewers || "").trim().slice(0, 40);
+  const message = String(req.body.message || "").trim().slice(0, 500);
+  if (!channel || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).send(page("Invalid request", `<h1>Missing channel or valid email</h1>
+      <p><a class="btn" href="/partners">← Back</a></p>`));
+  }
+
+  try {
+    const id = crypto.randomBytes(6).toString("hex");
+    await redis(["HSET", "partner:" + id,
+      "channel", channel, "email", email, "viewers", viewers, "message", message,
+      "at", new Date().toISOString(), "status", "pending"]);
+    await redis(["SADD", "partners:all", id]);
+    trackEvent(req, res, "partner_request", { channel: channel.slice(0, 60) });
+    res.send(page("Request received", `<h1>Request received - thank you!</h1>
+      <p class="muted">We review every application by hand and reply to
+      <strong style="color:#f2f2f7">${esc(email)}</strong>, usually within a couple of days.</p>
+      <a class="btn" href="/">← Back to the site</a>`));
+  } catch (err) {
+    console.error("partner request failed:", err.message);
+    res.status(500).send(page("Error", `<h1>Something went wrong - please try again</h1>`));
   }
 });
 
@@ -1322,6 +1468,136 @@ app.get("/admin/generate", async (req, res) => {
   }
 });
 
+// Approve a partner request: generate 1 lifetime key for the streamer plus a
+// batch of 30-day viewer keys, store them on the request (idempotent - a
+// second visit just re-shows them), and hand back a pre-filled mailto: reply
+// so the owner reviews and sends every email personally from their own
+// mailbox. Deliberately no server-side sending: outreach stays one-to-one.
+app.get("/admin/partner/approve", async (req, res) => {
+  if (!adminAuthorized(req)) return res.redirect("/login");
+  if (!sameOriginRequest(req)) return res.status(403).send(page("Blocked",
+    `<h1>Cross-site request blocked</h1><p><a class="btn" href="/admin">← Back</a></p>`));
+  if (!bindingEnabled) return res.redirect("/admin");
+  const id = String(req.query.id || "");
+  if (!/^[a-f0-9]{12}$/.test(id)) return res.redirect("/admin");
+
+  try {
+    const p = flattenHash(await redis(["HGETALL", "partner:" + id]));
+    if (!p.email) return res.redirect("/admin");
+
+    let skey = p.skey || "";
+    let vkeys = p.vkeys ? p.vkeys.split(",") : [];
+    let code = p.code || "";
+    if (!skey) {
+      const label = p.channel.slice(0, 60);
+      skey = await generateKey({ days: 0, note: "partner: " + label });
+      vkeys = [];
+      for (let i = 0; i < 10; ++i) {
+        vkeys.push(await generateKey({ days: 30, note: "viewers: " + label }));
+      }
+      // Referral code from the channel name (last URL segment), e.g.
+      // twitch.tv/CoolStreamer -> COOLSTREAMER. Random digits on collision.
+      const seg = p.channel.replace(/\/+$/, "").split("/").pop() || "";
+      let base = seg.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 12) || "STREAM";
+      code = base;
+      while (await redis(["GET", "refcode:" + code])) {
+        code = base.slice(0, 10) + Math.floor(10 + Math.random() * 90);
+      }
+      await redis(["SET", "refcode:" + code, id]);
+      await redis(["HSET", "partner:" + id,
+        "status", "approved", "skey", skey, "vkeys", vkeys.join(","), "code", code,
+        "approvedAt", new Date().toISOString()]);
+    }
+
+    const bodyLines = [
+      "Hey!",
+      "",
+      "Thanks for applying to the Antigravity partner program - you're in.",
+      "",
+      "Your personal lifetime Pro key (paste it into the app's activation screen):",
+      "  " + skey,
+      "",
+      "And 10 one-month Pro keys for your viewers - drop them in chat, run a",
+      "contest, whatever works for your stream:",
+      ...vkeys.map((k) => "  " + k),
+      "",
+      "You also have a creator code: " + code,
+      "Viewers who buy through your link get lifetime Pro for GBP 8 instead of",
+      "GBP 10, and you earn GBP 2.50 for every lifetime sale:",
+      "  " + BASE_URL + "/?code=" + code,
+      "We track your sales and pay out by PayPal once you're over GBP 20 -",
+      "just reply with your PayPal email whenever you like.",
+      "",
+      "One legal note: when you mention the code or link on stream or in your",
+      "description, UK advertising rules require disclosing it's a partnership",
+      "(a simple #ad or 'partner link' next to it is enough).",
+      "",
+      "Download: " + BASE_URL + "/download",
+      "",
+      "No obligations - enjoy it, and if it gets a laugh on stream, a link in",
+      "your description would mean a lot. Any problems, just reply to this email.",
+      "",
+      "Have fun!",
+    ].join("\n");
+    const mailto = "mailto:" + encodeURIComponent(p.email)
+      + "?subject=" + encodeURIComponent("Your Antigravity partner keys")
+      + "&body=" + encodeURIComponent(bodyLines);
+
+    res.send(page("Partner approved", `
+      <h1>Partner approved</h1>
+      <p class="muted">${esc(p.channel)} · ${esc(p.email)}</p>
+      <p>Streamer lifetime key:</p>
+      <code class="key">${esc(skey)}</code>
+      <p>Viewer giveaway keys (30 days each):</p>
+      <code class="key" style="font-size:0.85rem">${vkeys.map(esc).join("<br>")}</code>
+      <p>Creator code (lifetime £8 for viewers, £${REF_COMMISSION}/sale to the streamer):</p>
+      <code class="key">${esc(code)} · ${BASE_URL}/?code=${esc(code)}</code>
+      <p><a class="btn" href="${mailto}">Open reply email (review &amp; send)</a>
+         <a class="btn ghost" href="/admin">← Dashboard</a></p>
+      <p class="muted">The email opens in your own mail app - nothing is sent automatically.</p>`,
+      { wide: true }));
+  } catch (err) {
+    console.error("partner approve failed:", err.message);
+    res.redirect("/admin");
+  }
+});
+
+// Records a commission payout: moves the partner's owed balance into their
+// lifetime paid-out total. Click AFTER actually sending the PayPal payment -
+// this is bookkeeping, no money moves here (payouts stay manual on purpose).
+app.get("/admin/partner/paid", async (req, res) => {
+  if (!adminAuthorized(req)) return res.redirect("/login");
+  if (!sameOriginRequest(req)) return res.status(403).send(page("Blocked",
+    `<h1>Cross-site request blocked</h1><p><a class="btn" href="/admin">← Back</a></p>`));
+  const id = String(req.query.id || "");
+  if (/^[a-f0-9]{12}$/.test(id)) {
+    try {
+      const owed = parseFloat(await redis(["HGET", "partner:" + id, "owed"]) || "0");
+      if (owed > 0) {
+        await redis(["HINCRBYFLOAT", "partner:" + id, "paidOut", String(owed)]);
+        await redis(["HSET", "partner:" + id, "owed", "0", "lastPaidAt", new Date().toISOString()]);
+      }
+    } catch (err) { console.error("partner paid failed:", err.message); }
+  }
+  res.redirect("/admin");
+});
+
+// Remove a partner request from the list (spam / not a fit). Any keys already
+// generated for it stay valid - revoke them from the key table if needed.
+app.get("/admin/partner/dismiss", async (req, res) => {
+  if (!adminAuthorized(req)) return res.redirect("/login");
+  if (!sameOriginRequest(req)) return res.status(403).send(page("Blocked",
+    `<h1>Cross-site request blocked</h1><p><a class="btn" href="/admin">← Back</a></p>`));
+  const id = String(req.query.id || "");
+  if (/^[a-f0-9]{12}$/.test(id)) {
+    try {
+      await redis(["SREM", "partners:all", id]);
+      await redis(["DEL", "partner:" + id]);
+    } catch (err) { console.error("partner dismiss failed:", err.message); }
+  }
+  res.redirect("/admin");
+});
+
 const PLAN_COLORS = { lifetime: "#f2f2f7", monthly: "#38b0f8", trial: "#c99cf1" };
 
 // Per-visitor journey: exactly what one person did on the site, in order.
@@ -1461,6 +1737,49 @@ app.get("/admin", async (req, res) => {
           <button type="submit">Generate key</button>
         </form>
       </div>
+
+      ${await (async () => {
+        try {
+          const ids = (await redis(["SMEMBERS", "partners:all"])) || [];
+          if (!ids.length) return "";
+          const reqs = [];
+          for (const id of ids.slice(0, 100)) {
+            const p = flattenHash(await redis(["HGETALL", "partner:" + id]));
+            if (p.email) reqs.push({ id, ...p });
+          }
+          reqs.sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
+          const pending = reqs.filter((r) => r.status !== "approved").length;
+          const totalOwed = reqs.reduce((s, r) => s + parseFloat(r.owed || "0"), 0);
+          const rows = reqs.map((r) => {
+            const owed = parseFloat(r.owed || "0");
+            return `<tr${r.status === "approved" ? "" : ' style="opacity:0.75"'}>
+            <td>${esc((r.at || "").replace("T", " ").slice(0, 16))}</td>
+            <td>${esc(r.channel)}</td>
+            <td>${esc(r.email)}</td>
+            <td>${esc(r.viewers || "")}</td>
+            <td>${r.code ? `<code>${esc(r.code)}</code>` : ""}</td>
+            <td>${esc(r.sales || "0")}</td>
+            <td style="color:${owed > 0 ? "#5fd18a" : "#9a9aa5"}">£${owed.toFixed(2)}${
+              parseFloat(r.paidOut || "0") > 0 ? `<br><span class="muted" style="font-size:0.75rem">paid £${parseFloat(r.paidOut).toFixed(2)}</span>` : ""}</td>
+            <td style="white-space:nowrap">${r.status === "approved"
+              ? `<a href="/admin/partner/approve?id=${r.id}">view keys</a>`
+              : `<a style="color:#5fd18a" href="/admin/partner/approve?id=${r.id}"
+                   onclick="return confirm('Approve this streamer? Generates their lifetime key + 10 viewer keys + creator code.')">approve</a>`}
+              ${owed > 0 ? ` · <a style="color:#38b0f8" href="/admin/partner/paid?id=${r.id}"
+                   onclick="return confirm('Mark £${owed.toFixed(2)} as paid out? Click this AFTER sending the PayPal payment.')">mark paid</a>` : ""}
+              · <a href="/admin/partner/dismiss?id=${r.id}"
+                   onclick="return confirm('Remove this request from the list?')">dismiss</a></td>
+          </tr>`; }).join("");
+          return `<h2>Partner requests${pending ? ` <span style="color:#5fd18a;font-size:0.9rem">· ${pending} pending</span>` : ""}${
+            totalOwed > 0 ? ` <span style="color:#38b0f8;font-size:0.9rem">· £${totalOwed.toFixed(2)} owed</span>` : ""}</h2>
+            <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+            <tr style="text-align:left;color:#9a9aa5"><th>When (UTC)</th><th>Channel</th><th>Email</th><th>Viewers</th><th>Code</th><th>Sales</th><th>Owed</th><th></th></tr>
+            ${rows}</table></div>`;
+        } catch (e) {
+          console.error("partners render failed:", e.message);
+          return "";
+        }
+      })()}
 
       <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.85rem">
         <tr style="text-align:left;color:#9a9aa5">
@@ -1735,6 +2054,17 @@ app.post("/webhook", async (req, res) => {
     if (payment.sequenceType === "first" && payment.customerId) {
       // Backup path in case the buyer never returns to /key
       await activateSubscription(payment);
+    } else if (!payment.customerId) {
+      // One-time (lifetime) payment. Same first-seen guard as /key, so the
+      // purchase stats + referral commission land exactly once no matter
+      // which path sees the payment first (buyer may never return to /key).
+      const added = await redis(["SADD", "stats:purchased", id]);
+      if (added === 1) {
+        await redis(["INCR", "stats:event:purchase"]);
+        await redis(["INCRBYFLOAT", "stats:revenue",
+          (payment.amount && payment.amount.value) || "0"]);
+        await creditReferral(payment).catch((e) => console.error("referral credit failed:", e.message));
+      }
     } else if (payment.sequenceType === "recurring" && payment.customerId) {
       // Renewal: extend the paid-until window of this customer's key
       const key = await redis(["GET", "cust:" + payment.customerId]);
