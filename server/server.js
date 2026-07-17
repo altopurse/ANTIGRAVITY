@@ -22,6 +22,10 @@ const fs = require("fs");
 const path = require("path");
 
 const app = express();
+// Render terminates TLS behind exactly one proxy hop; trusting it makes
+// req.ip the real client address (the proxy-appended X-Forwarded-For entry,
+// which a client can't spoof) - that's what the rate limiter keys on.
+app.set("trust proxy", 1);
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 // Static assets: og.png (social share preview) and favicon.ico live here.
@@ -106,6 +110,37 @@ function flattenHash(flat) {
   for (let i = 0; i + 1 < flat.length; i += 2) obj[flat[i]] = flat[i + 1];
   return obj;
 }
+
+// ---------- rate limiting ----------
+//
+// In-memory fixed-window limiter, keyed by route name + client IP. Deliberately
+// NOT Redis-backed: it must cost zero Upstash quota (abuse of these endpoints
+// is exactly what would burn the quota), and a single Render instance means
+// in-memory is accurate. A restart resets the windows, which is fine - the
+// point is stopping sustained abuse, not perfect accounting.
+
+const rlBuckets = new Map();
+
+// Returns true if this request is allowed, false if the caller is over the
+// limit of `max` requests per `windowMs` for this route.
+function rateAllow(name, req, max, windowMs) {
+  const now = Date.now();
+  const k = name + ":" + (req.ip || "?");
+  let b = rlBuckets.get(k);
+  if (!b || now > b.reset) {
+    b = { count: 0, reset: now + windowMs };
+    rlBuckets.set(k, b);
+  }
+  b.count++;
+  return b.count <= max;
+}
+
+// Sweep expired buckets so the map can't grow unbounded under an IP-rotating
+// flood. unref() keeps the timer from holding the process open.
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, b] of rlBuckets) if (now > b.reset) rlBuckets.delete(k);
+}, 10 * 60 * 1000).unref();
 
 // ---------- first-party analytics (no third parties, all in our Redis) ----------
 //
@@ -495,7 +530,7 @@ app.get("/", async (req, res) => {
 app.get("/legal", (req, res) => {
   res.send(page("Terms & Privacy - Antigravity Voice Engine", `
     <h1>Terms &amp; Privacy</h1>
-    <p class="muted">Last updated: ${new Date().toISOString().slice(0, 10)}. Plain-English summary of how
+    <p class="muted">Last updated: 2026-07-17. Plain-English summary of how
     Antigravity Voice Engine works and what data it uses. Using the app or site means you accept this.</p>
 
     <h2>The basics</h2>
@@ -525,6 +560,10 @@ app.get("/legal", (req, res) => {
           and is <strong>never uploaded</strong>.</li>
       <li><strong>Install status:</strong> we record that a machine has the app installed (by that anonymous
           fingerprint) and, if you uninstall, that it was removed.</li>
+      <li><strong>Ads:</strong> this website shows one ad banner served by
+          <a href="https://a-ads.com" style="color:#8a74ff">A-ADS</a>; loading it means their server sees
+          your IP address (we share nothing else with them). The free version of the app may also show an
+          ad banner, fetched via our server. Pro has no ads.</li>
     </ul>
 
     <h2>Your choices</h2>
@@ -550,6 +589,15 @@ app.get("/download", (req, res) => {
 
 app.get("/buy", async (req, res, next) => {
   try {
+    // Every hit creates real Mollie objects (payments, and customers for the
+    // monthly plan) - throttle so a bot can't pollute the Mollie account.
+    // 8/hour per IP is far more than any genuine buyer needs.
+    if (!rateAllow("buy", req, 8, 60 * 60 * 1000)) {
+      return res.status(429).send(page("Slow down",
+        `<h1>Too many checkout attempts</h1>
+         <p class="muted">Please wait a bit and try again, or email us if you're stuck.</p>
+         <a class="btn" href="/">← Back</a>`));
+    }
     const plan = req.query.plan === "monthly" ? "monthly" : "life";
     trackEvent(req, res, "buy_click", { plan });
 
@@ -747,15 +795,16 @@ function recordProfile(req, key, device) {
     if (!fresh) return; // already recorded a profile/install for this device today
 
     const now = new Date().toISOString();
-    const ip = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "")
-      .split(",")[0].trim();
+    // Deliberately NO raw IP here: the legal page promises app users are
+    // tracked only by the anonymous fingerprint + country, the dashboard
+    // never displays an IP, and not storing it keeps that promise true
+    // (data minimization - can't leak or be subpoenaed what isn't kept).
     const country = String(req.headers["cf-ipcountry"] || req.headers["x-vercel-ip-country"] || "");
     const fields = [
       "lastSeen", now,
       "lastDevice", device || "",
       "os", String(req.query.os || "").slice(0, 64),
       "appVersion", String(req.query.v || "").slice(0, 32),
-      "ip", ip.slice(0, 64),
     ];
     if (country) fields.push("country", country.slice(0, 8));
     Promise.all([
@@ -806,6 +855,14 @@ function recordProfile(req, key, device) {
 //   { valid: false, reason: "invalid" }      -> bad/forged key
 //   { valid: false, reason: "device_limit" } -> real key, too many devices
 app.get("/api/verify", async (req, res) => {
+  // The app verifies on launch and periodically - 60/hour per IP is generous
+  // for real use but stops key-guessing floods and Redis-quota burn. The
+  // over-limit body deliberately contains NO "valid" field: the app treats an
+  // unrecognized response as a network error and falls back to offline grace,
+  // so a throttled paying user is never locked out or has their key deleted.
+  if (!rateAllow("verify", req, 60, 60 * 60 * 1000)) {
+    return res.status(429).json({ error: "rate_limited" });
+  }
   const key = req.query.key;
   if (!signatureValid(key)) {
     return res.json({ valid: false, reason: "invalid" });
@@ -868,6 +925,9 @@ app.get("/api/verify", async (req, res) => {
 // authorizes wiping that key's own device slots (same trust model as
 // activating it). The app re-verifies right after, re-registering this PC.
 app.get("/api/unbindall", async (req, res) => {
+  if (!rateAllow("unbind", req, 10, 60 * 60 * 1000)) {
+    return res.status(429).json({ cleared: false, reason: "rate_limited" });
+  }
   const key = req.query.key;
   if (!signatureValid(key)) {
     return res.json({ cleared: false, reason: "invalid" });
@@ -885,6 +945,9 @@ app.get("/api/unbindall", async (req, res) => {
 });
 
 app.get("/api/release", async (req, res) => {
+  if (!rateAllow("release", req, 10, 60 * 60 * 1000)) {
+    return res.status(429).json({ released: false, reason: "rate_limited" });
+  }
   const key = req.query.key;
   if (!signatureValid(key)) {
     return res.json({ released: false, reason: "invalid" });
@@ -927,9 +990,41 @@ function hasValidSession(req) {
 
 function adminAuthorized(req) {
   if (ADMIN_SECRET.length === 0) return false;
-  const given = String(req.query.secret || "");
-  if (given && safeEqual(given, ADMIN_SECRET)) return true;
+  // Authorization is by signed session cookie only (obtained via POST /login).
+  // The admin secret is deliberately NOT accepted as a query parameter: URLs
+  // leak into server logs, browser history and the Referer header.
   return hasValidSession(req);
+}
+
+// CSRF guard for state-changing admin routes. These are GET links inside the
+// dashboard, so they must be same-origin. A forged cross-site navigation
+// (malicious link/img/redirect) carries Sec-Fetch-Site: cross-site and is
+// rejected; genuine dashboard clicks are same-origin. Falls back to a Referer
+// host check for browsers that don't send Sec-Fetch-Site.
+function sameOriginRequest(req) {
+  const site = req.headers["sec-fetch-site"];
+  if (site) return site === "same-origin" || site === "same-site" || site === "none";
+  const ref = String(req.headers["referer"] || "");
+  if (!ref) return false;
+  try {
+    return new URL(ref).host === new URL(BASE_URL).host;
+  } catch {
+    return false;
+  }
+}
+
+// Combined gate for admin routes that mutate state: valid session AND a
+// same-origin request. Sends the right rejection and returns false if not.
+function adminMutationAllowed(req, res) {
+  if (!adminAuthorized(req)) {
+    res.status(403).json({ error: "forbidden" });
+    return false;
+  }
+  if (!sameOriginRequest(req)) {
+    res.status(403).json({ error: "cross-site request blocked" });
+    return false;
+  }
+  return true;
 }
 
 // Dashboard login: password form -> signed session cookie
@@ -944,6 +1039,13 @@ app.get("/login", (req, res) => {
 });
 
 app.post("/login", (req, res) => {
+  // 5 attempts per 15 minutes per IP stops password brute-forcing while
+  // leaving plenty of room for a fat-fingered real login.
+  if (!rateAllow("login", req, 5, 15 * 60 * 1000)) {
+    return res.status(429).send(page("Too many attempts",
+      `<h1>Too many login attempts</h1>
+       <p class="muted">Wait 15 minutes and try again.</p>`));
+  }
   const pw = String(req.body.password || "");
   if (ADMIN_SECRET.length > 0 && safeEqual(pw, ADMIN_SECRET)) {
     res.setHeader("Set-Cookie", makeSessionCookie());
@@ -1089,7 +1191,7 @@ app.get("/api/admin/keys", async (req, res) => {
 // Device manager: wipe all device slots for a key (e.g. customer got a new PC
 // and lost access to the old ones). The key stays in the used registry.
 app.get("/api/admin/clear", async (req, res) => {
-  if (!adminAuthorized(req)) return res.status(403).json({ error: "forbidden" });
+  if (!adminMutationAllowed(req, res)) return;
   const key = String(req.query.key || "");
   if (!signatureValid(key)) return res.status(400).json({ error: "invalid key" });
   try {
@@ -1105,7 +1207,7 @@ app.get("/api/admin/clear", async (req, res) => {
 // Revoke a key (owner only): kills it everywhere and frees its device slots.
 // Works on any plan - lifetime, monthly or trial. Use for stolen/shared keys.
 app.get("/api/admin/revoke", async (req, res) => {
-  if (!adminAuthorized(req)) return res.status(403).json({ error: "forbidden" });
+  if (!adminMutationAllowed(req, res)) return;
   const key = String(req.query.key || "");
   if (!signatureValid(key)) return res.status(400).json({ error: "invalid key" });
   try {
@@ -1121,7 +1223,7 @@ app.get("/api/admin/revoke", async (req, res) => {
 
 // Un-revoke (owner only): re-enable a key you revoked by mistake.
 app.get("/api/admin/unrevoke", async (req, res) => {
-  if (!adminAuthorized(req)) return res.status(403).json({ error: "forbidden" });
+  if (!adminMutationAllowed(req, res)) return;
   const key = String(req.query.key || "");
   if (!signatureValid(key)) return res.status(400).json({ error: "invalid key" });
   try {
@@ -1138,7 +1240,7 @@ app.get("/api/admin/unrevoke", async (req, res) => {
 // can never work again even if it re-verifies) AND removes its records from
 // every list, so it disappears from the dashboard.
 app.get("/api/admin/delete", async (req, res) => {
-  if (!adminAuthorized(req)) return res.status(403).json({ error: "forbidden" });
+  if (!adminMutationAllowed(req, res)) return;
   const key = String(req.query.key || "");
   if (!signatureValid(key)) return res.status(400).json({ error: "invalid key" });
   try {
@@ -1159,6 +1261,8 @@ app.get("/api/admin/delete", async (req, res) => {
 // dashboard with it highlighted so it can be copied immediately.
 app.get("/admin/generate", async (req, res) => {
   if (!adminAuthorized(req)) return res.redirect("/login");
+  if (!sameOriginRequest(req)) return res.status(403).send(page("Blocked",
+    `<h1>Cross-site request blocked</h1><p><a class="btn" href="/admin">← Back</a></p>`));
   if (!bindingEnabled) return res.redirect("/admin");
   const days = Math.max(0, Math.min(3650, parseInt(req.query.days || "0", 10) || 0));
   const note = String(req.query.note || "").slice(0, 80);
@@ -1607,6 +1711,9 @@ app.get("/api/version", (req, res) => {
 // removed from a machine. Device id only - no key required.
 app.get("/api/uninstall", async (req, res) => {
   res.json({ ok: true });
+  // Unauthenticated by nature (the app is being removed), so throttle hard:
+  // a real machine uninstalls once, not hundreds of times an hour.
+  if (!rateAllow("uninstall", req, 5, 60 * 60 * 1000)) return;
   if (!bindingEnabled) return;
   const device = String(req.query.device || "").slice(0, 128);
   if (!device) return;
@@ -1626,6 +1733,10 @@ app.get("/api/uninstall", async (req, res) => {
 // Kept as a capped list; readable only through the admin dashboard.
 app.get("/api/crash", async (req, res) => {
   res.json({ ok: true }); // answer instantly - a dying app is waiting
+  // Unauthenticated write - throttle so a bot can't flood the crash list or
+  // burn Redis quota. A genuinely crash-looping machine still gets 10 reports
+  // an hour on the dashboard, which is plenty to diagnose it.
+  if (!rateAllow("crash", req, 10, 60 * 60 * 1000)) return;
   if (!bindingEnabled) return;
   try {
     const entry = JSON.stringify({
