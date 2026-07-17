@@ -541,6 +541,17 @@ app.get("/", async (req, res) => {
        (installed automatically). In Discord/your game, just pick <strong>"CABLE Output"</strong> as your
        microphone - everyone now hears your new voice. The guided setup walks you through it on first launch.</p>
 
+       <h2>Streamers: partner with us</h2>
+       <div class="card" style="text-align:left">
+         <p style="margin-top:0" class="muted">Stream on Twitch, YouTube, Kick or TikTok? Partner with
+         Antigravity and get <strong style="color:#f2f2f7">a free lifetime Pro key</strong>,
+         <strong style="color:#f2f2f7">10 Pro keys to drop to your viewers</strong>, and
+         <strong style="color:#f2f2f7">your own creator code</strong> - your viewers get lifetime Pro
+         for £8 instead of £10, and you earn £2.50 for every sale made with your code, paid out by
+         PayPal. No contracts, no scripts, nothing to pay - ever.</p>
+         <a class="btn" href="/partners">Become a partner →</a>
+       </div>
+
        <div style="margin:36px 0 8px">
        <!-- BEGIN AADS AD UNIT 2447478 -->
        <div id="frame" style="width: 100%;margin: auto;position: relative; z-index: 99998;">
