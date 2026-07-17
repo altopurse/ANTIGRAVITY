@@ -11,56 +11,78 @@ the environment variables below are set, and computes the anti-tamper
 `EXPECTED_HASH` *after* signing so it stays correct. Nothing else needs to
 change; you only need a certificate.
 
-## Recommended: Azure Trusted Signing (~$9.99/month)
+## Our situation (checked July 2026)
 
-Microsoft's own signing service. Cheapest option, and SmartScreen trusts its
-certificates quickly (often immediately, because Microsoft vouches for the
-identity check).
+Microsoft's signing service - now called **Azure Artifact Signing** (formerly
+Trusted Signing), $9.99/month - only accepts **individual** developers from
+the **USA and Canada**. UK-based *organizations* are eligible, but UK
+*individuals* are not. So as a UK individual there are exactly two paths:
 
-1. Create an Azure account at https://azure.microsoft.com (needs a card).
-2. In the Azure portal, create a **Trusted Signing** resource
-   (Basic tier, $9.99/month). Regions: pick West Europe.
-3. Complete **identity validation** ("Individual" works for a sole developer -
-   you verify with government ID; a company registration works too).
-4. Create a **certificate profile** (type: Public Trust).
-5. Install the tooling on the build PC:
-   - Windows SDK (for signtool): `winget install Microsoft.WindowsSDK.10.0.26100`
-   - The dlib: `dotnet tool` or NuGet package `Microsoft.Trusted.Signing.Client`
-     (download and note the path to `Azure.CodeSigning.Dlib.dll`).
-6. Create `metadata.json` next to the dlib:
+## Option A (recommended when revenue justifies it): register a UK Ltd
+
+1. Register a limited company at Companies House (~£50, done online in a day).
+   Bonus beyond signing: the company name appears on the certificate (looks
+   more professional than a personal name) and gives the app business a
+   liability wrapper.
+2. Create a paid Azure subscription (pay-as-you-go; free/trial subscriptions
+   are rejected). Billing is the full month, not pro-rated.
+3. Azure portal: register the `Microsoft.CodeSigning` resource provider on
+   the subscription (Subscription -> Resource providers).
+4. Create an **Artifact Signing** account: Basic SKU ($9.99/mo), region
+   West Europe (endpoint `https://weu.codesigning.azure.net`).
+5. On the account's Access control (IAM): assign yourself the
+   **Identity Verifier** role (the "New identity validation" button is
+   greyed out without it).
+6. New identity validation -> **Organization** -> the Ltd's Companies House
+   details. Click the email verification link **within 7 days** (it cannot
+   be resent; a missed link means starting over).
+7. When validation shows Completed: create a **certificate profile**
+   (type: Public Trust), then assign yourself the
+   **Certificate Profile Signer** role (separate from the verifier role).
+8. On the build PC: install the Windows SDK (signtool), the
+   `Microsoft.Trusted.Signing.Client` NuGet package (contains
+   `Azure.CodeSigning.Dlib.dll`), and the Azure CLI; run `az login`.
+9. Create `metadata.json` next to the dlib:
    ```json
    {
      "Endpoint": "https://weu.codesigning.azure.net",
-     "CodeSigningAccountName": "<your-account-name>",
-     "CertificateProfileName": "<your-profile-name>"
+     "CodeSigningAccountName": "<account-name>",
+     "CertificateProfileName": "<profile-name>"
    }
    ```
-7. Sign in once with `az login` (Azure CLI), then set for packaging:
-   ```powershell
-   $env:CODESIGN_CMD = 'signtool sign /v /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 /dlib "C:\tools\Azure.CodeSigning.Dlib.dll" /dmdf "C:\tools\metadata.json" {file}'
-   powershell -ExecutionPolicy Bypass -File package.ps1
-   ```
+10. Package with signing enabled:
+    ```powershell
+    $env:CODESIGN_CMD = 'signtool sign /v /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 /dlib "C:\tools\Azure.CodeSigning.Dlib.dll" /dmdf "C:\tools\metadata.json" {file}'
+    powershell -ExecutionPolicy Bypass -File package.ps1
+    ```
 
-## Alternative: classic OV certificate (PFX file)
+## Option B (available today as an individual): Certum / SSL.com OV cert
 
-Buy an OV code-signing certificate from a CA (Certum is the budget option for
-individuals, ~€70/three years for an "Open Source" cert; Sectigo/DigiCert cost
-more). Since 2023 these ship on hardware tokens or cloud HSMs rather than
-plain PFX files, so follow the CA's signtool instructions - or if you do have
-a PFX:
+Traditional CAs validate individuals in the UK. **Certum's "Open Source Code
+Signing"** product is the budget favourite for indie devs (roughly EUR 70 for
+a multi-year cert; despite the name it's fine for freeware/shareware-style
+distribution - check their current terms). SSL.com is the pricier
+alternative.
 
-```powershell
-$env:CODESIGN_PFX = "C:\secure\antigravity.pfx"
-$env:CODESIGN_PFX_PASSWORD = "..."
-powershell -ExecutionPolicy Bypass -File package.ps1
-```
+- Validation: passport/ID + a short video or notary-style check, done online.
+- Delivery: since 2023 keys ship on a USB token or in their cloud signer
+  (SimplySign) - not a plain PFX. Follow the CA's signtool guide; their
+  command plugs into the same hook:
+  ```powershell
+  $env:CODESIGN_CMD = '<the CA''s documented signtool command> {file}'
+  ```
+- Honest trade-off: an OV cert starts with **zero SmartScreen reputation**.
+  The warning only fades after enough people download the signed installer
+  (weeks to months at low volume). Microsoft-validated identities (Option A)
+  gain trust much faster. Signed-but-new is still strictly better than
+  unsigned: reputation accrues to the certificate and persists across
+  releases, and AV false-positives drop immediately.
 
-## Notes
+## Either way, afterwards
 
-- **Never commit the certificate or password.** They live only in env vars /
-  a secure folder.
-- OV certs (unlike Azure Trusted Signing or EV) start with zero SmartScreen
-  reputation - the warning fades only after enough downloads. Trusted Signing
-  is both cheaper and faster to trust; prefer it.
-- After the first signed release, keep signing every release with the same
-  identity - reputation attaches to the publisher.
+- Submit the signed installer to Microsoft Security Intelligence
+  (https://www.microsoft.com/wdsi/filesubmission) to speed up SmartScreen
+  reputation.
+- Keep signing every release with the same identity - reputation attaches to
+  the publisher and compounds.
+- **Never commit certificates, tokens or passwords.** Env vars only.
