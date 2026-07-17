@@ -198,7 +198,11 @@ void UIController::render() {
     // NOT this screen, so there's no security in gating the UI. The activation
     // screen is now an on-demand overlay reached from the Upgrade button / the
     // License section, shown here only when explicitly requested.
-    m_isPro = m_license && m_license->isUnlocked();
+    // A running Pro trial counts as Pro for the UI (padlocks open) - the
+    // engine-level gates follow the same entitlement mask, and tickTrial
+    // handles the drop back to FREE when the clock runs out.
+    ent::tickTrial();
+    m_isPro = (m_license && m_license->isUnlocked()) || ent::trialActive();
 
     if (m_showActivation) {
         drawActivationScreen();
@@ -332,19 +336,44 @@ void UIController::drawTopBar() {
     widgets::StatusPill(pillText.c_str(), active ? theme::Green : theme::TextDim);
 
     if (hasUpdate) {
-        std::string updateLabel = "Update v" + m_license->getUpdateVersion() + " available";
+        // One-click updater: downloads the installer in the background and
+        // runs it (the app closes itself so the exe can be replaced). If the
+        // download fails, the button falls back to opening the browser.
+        LicenseManager::UpdateState ust = m_license->getUpdateState();
+        std::string updateLabel;
+        switch (ust) {
+            case LicenseManager::UpdateState::Downloading: updateLabel = "Downloading update..."; break;
+            case LicenseManager::UpdateState::Ready:       updateLabel = "Starting installer..."; break;
+            case LicenseManager::UpdateState::Failed:      updateLabel = "Download failed - open page"; break;
+            default: updateLabel = "Update v" + m_license->getUpdateVersion() + " available"; break;
+        }
         float updateW = ImGui::CalcTextSize(updateLabel.c_str()).x + ImGui::GetStyle().FramePadding.x * 2;
         x -= spacing + updateW;
         ImGui::SetCursorPos(ImVec2(x, centerY - ImGui::GetFrameHeight() * 0.5f));
-        if (widgets::ColoredButton(updateLabel.c_str(), ImVec2(0, 0), theme::GreenLo)) {
-            m_license->openUpdatePage();
+        if (widgets::ColoredButton(updateLabel.c_str(), ImVec2(0, 0),
+                ust == LicenseManager::UpdateState::Failed ? theme::RedLo : theme::GreenLo)) {
+            if (ust == LicenseManager::UpdateState::Failed) {
+                m_license->openUpdatePage();
+            } else if (ust == LicenseManager::UpdateState::Idle) {
+                m_license->startUpdateDownload();
+            }
         }
-        ImGui::SetItemTooltip("A newer version is ready - opens the download page.");
+        switch (ust) {
+            case LicenseManager::UpdateState::Downloading:
+                ImGui::SetItemTooltip("Downloading the new version in the background..."); break;
+            case LicenseManager::UpdateState::Failed:
+                ImGui::SetItemTooltip("The automatic download didn't work - this opens the download page instead."); break;
+            default:
+                ImGui::SetItemTooltip("Downloads and installs the new version.\nYour settings and Pro key are kept."); break;
+        }
     }
 
     // Free tier: an "Upgrade" button + FREE pill, the always-visible conversion
-    // hook. Pro users see neither (nothing to sell them).
-    if (!m_isPro) {
+    // hook. During a Pro trial: the upgrade button plus a live countdown pill
+    // (urgency sells). Real Pro users see neither (nothing to sell them).
+    bool licensed = m_license && m_license->isUnlocked();
+    bool onTrial = ent::trialActive();
+    if (!licensed) {
         std::string upLabel = "Upgrade to Pro";
         float upW = ImGui::CalcTextSize(upLabel.c_str()).x + ImGui::GetStyle().FramePadding.x * 2 + S(4.0f);
         x -= spacing + upW;
@@ -352,14 +381,37 @@ void UIController::drawTopBar() {
         if (widgets::ColoredButton(upLabel.c_str(), ImVec2(0, btnH), theme::Accent)) {
             m_showActivation = true;
         }
-        ImGui::SetItemTooltip("Unlock all 8 effects and unlimited soundboard clips.");
+        ImGui::SetItemTooltip("Unlock all 9 effects and unlimited soundboard clips.");
 
-        ImGui::PushFont(theme::FontSmall);
-        float freeW = ImGui::CalcTextSize("FREE").x + S(38.0f);
-        ImGui::PopFont();
-        x -= spacing + freeW;
-        ImGui::SetCursorPos(ImVec2(x, centerY - pillH * 0.5f));
-        widgets::StatusPill("FREE", theme::Yellow);
+        if (onTrial) {
+            int left = ent::trialSecondsLeft();
+            char pill[32];
+            snprintf(pill, sizeof(pill), "TRIAL %d:%02d", left / 60, left % 60);
+            ImGui::PushFont(theme::FontSmall);
+            float trialW = ImGui::CalcTextSize(pill).x + S(38.0f);
+            ImGui::PopFont();
+            x -= spacing + trialW;
+            ImGui::SetCursorPos(ImVec2(x, centerY - pillH * 0.5f));
+            widgets::StatusPill(pill, theme::Green);
+            ImGui::SetItemTooltip("Every Pro effect is live - this is what your friends would hear.");
+        } else {
+            if (!ent::trialUsed()) {
+                std::string tryLabel = "Try Pro free - 10 min";
+                float tryW = ImGui::CalcTextSize(tryLabel.c_str()).x + ImGui::GetStyle().FramePadding.x * 2 + S(4.0f);
+                x -= spacing + tryW;
+                ImGui::SetCursorPos(ImVec2(x, centerY - btnH * 0.5f));
+                if (widgets::ColoredButton(tryLabel.c_str(), ImVec2(0, btnH), theme::GreenLo)) {
+                    ent::startTrial(10 * 60);
+                }
+                ImGui::SetItemTooltip("Hear all 9 effects and unlimited clips for 10 minutes.\nNo payment, no account - it just switches on.");
+            }
+            ImGui::PushFont(theme::FontSmall);
+            float freeW = ImGui::CalcTextSize("FREE").x + S(38.0f);
+            ImGui::PopFont();
+            x -= spacing + freeW;
+            ImGui::SetCursorPos(ImVec2(x, centerY - pillH * 0.5f));
+            widgets::StatusPill("FREE", theme::Yellow);
+        }
     }
 
     ImGui::SetCursorPosY(std::max(afterBrandY, centerY + btnH * 0.5f));
@@ -403,7 +455,7 @@ void UIController::drawActivationScreen() {
             m_showActivation = false;
         }
     }
-    ImGui::TextColored(theme::TextDim, "Pro unlocks all 8 effects and unlimited soundboard clips.");
+    ImGui::TextColored(theme::TextDim, "Pro unlocks all 9 effects and unlimited soundboard clips.");
     ImGui::TextColored(theme::TextDim, "10 GBP lifetime, or 2 GBP/month. Free tier keeps working either way.");
     widgets::Divider();
 
@@ -1109,7 +1161,12 @@ void UIController::drawDSPGraphPanel() {
             ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - S(168.0f));
 
             // Downcast nodes to edit custom parameters
-            if (auto* gate = dynamic_cast<NoiseGateNode*>(node.get())) {
+            if (auto* ns = dynamic_cast<NoiseSuppressorNode*>(node.get())) {
+                ImGui::TextColored(theme::TextDim, "AI denoiser: removes fans, hum & hiss while you talk");
+                ImGui::SliderFloat("Strength", &ns->m_strength, 0.0f, 1.0f, "%.2f");
+                ImGui::SetItemTooltip("1.0 = fully denoised. Lower it to blend some\nof the original mic back in if your voice\nstarts sounding processed.");
+            }
+            else if (auto* gate = dynamic_cast<NoiseGateNode*>(node.get())) {
                 ImGui::SliderFloat("Threshold (dB)", &gate->m_thresholdDB, -70.0f, -10.0f, "%.1f dB");
                 ImGui::SliderFloat("Release Time (ms)", &gate->m_releaseMs, 20.0f, 600.0f, "%.0f ms");
             }

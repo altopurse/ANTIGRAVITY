@@ -17,7 +17,7 @@ one-time Pro upgrade that unlocks everything.
 Antigravity Voice Engine changes your voice live and fires off sound effects in
 Discord, games, Zoom and OBS — all from one low-latency Windows app. Start free
 with reverb, pitch-shifting and a 2-clip soundboard; pay £10 once to unlock all
-8 effects and unlimited sounds, with no account and no subscription trap.
+9 effects and unlimited sounds, with no account and no subscription trap.
 
 ## What it is
 
@@ -37,8 +37,9 @@ with reverb, pitch-shifting and a 2-clip soundboard; pay £10 once to unlock all
 - Ultra-low latency + guided first-time setup
 
 **Pro (paid) — everything in Free, plus:**
-- All 8 effects: Noise Gate, Compressor, Parametric EQ, Pitch Shifter,
-  Robotizer (Ring Mod), Reverb, Distortion, Telephone Filter
+- All 9 effects: AI Noise Suppressor (RNNoise), Noise Gate, Compressor,
+  Parametric EQ, Pitch Shifter, Robotizer (Ring Mod), Reverb, Distortion,
+  Telephone Filter
 - Unlimited soundboard clips
 - Every future effect included
 

@@ -6,6 +6,7 @@
 #include <thread>
 #include <algorithm>
 #include <cctype>
+#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -371,6 +372,126 @@ static std::string httpGetBody(const std::wstring& path) {
     return body;
 }
 #endif
+
+#ifdef _WIN32
+// Downloads an arbitrary https:// URL to a file, streaming (installers are
+// megabytes - never buffered whole in memory). Returns true only for a
+// plausible Windows executable: https scheme, "MZ" magic, sane size. Those
+// checks stop a proxy/CDN error page from being saved and "run" as an update.
+static bool httpsDownloadToFile(const std::wstring& url, const std::wstring& dest) {
+    URL_COMPONENTS uc = {};
+    uc.dwStructSize = sizeof(uc);
+    wchar_t hostBuf[256] = {0};
+    wchar_t pathBuf[2048] = {0};
+    uc.lpszHostName = hostBuf;
+    uc.dwHostNameLength = sizeof(hostBuf) / sizeof(wchar_t);
+    uc.lpszUrlPath = pathBuf;
+    uc.dwUrlPathLength = sizeof(pathBuf) / sizeof(wchar_t);
+    if (!WinHttpCrackUrl(url.c_str(), static_cast<DWORD>(url.size()), 0, &uc)) return false;
+    if (uc.nScheme != INTERNET_SCHEME_HTTPS) return false; // https only, always
+
+    std::wstring pathWithQuery = pathBuf;
+    if (uc.lpszExtraInfo && uc.dwExtraInfoLength > 0) {
+        pathWithQuery += std::wstring(uc.lpszExtraInfo, uc.dwExtraInfoLength);
+    }
+
+    bool ok = false;
+    HINTERNET hSession = WinHttpOpen(L"AntigravityVoiceEngine-Updater/" APP_VERSION,
+                                     WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                                     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) return false;
+    WinHttpSetTimeouts(hSession, 30000, 60000, 30000, 300000); // installers take a while
+
+    HINTERNET hConnect = WinHttpConnect(hSession, hostBuf, uc.nPort ? uc.nPort : INTERNET_DEFAULT_HTTPS_PORT, 0);
+    HINTERNET hRequest = nullptr;
+    if (hConnect) {
+        hRequest = WinHttpOpenRequest(hConnect, L"GET", pathWithQuery.c_str(), nullptr,
+                                      WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                      WINHTTP_FLAG_SECURE);
+    }
+
+    if (hRequest &&
+        WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                           WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
+        WinHttpReceiveResponse(hRequest, nullptr)) {
+
+        DWORD status = 0, statusSize = sizeof(status);
+        WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                            WINHTTP_HEADER_NAME_BY_INDEX, &status, &statusSize, WINHTTP_NO_HEADER_INDEX);
+        if (status == 200) {
+            std::ofstream out(fs::path(dest), std::ios::binary | std::ios::trunc);
+            if (out) {
+                uint64_t total = 0;
+                char first2[2] = {0, 0};
+                bool haveMagic = false;
+                DWORD available = 0;
+                std::vector<char> buf;
+                while (WinHttpQueryDataAvailable(hRequest, &available) && available > 0) {
+                    buf.resize(available);
+                    DWORD read = 0;
+                    if (!WinHttpReadData(hRequest, buf.data(), available, &read) || read == 0) break;
+                    if (!haveMagic && read >= 2) {
+                        first2[0] = buf[0]; first2[1] = buf[1];
+                        haveMagic = true;
+                    }
+                    out.write(buf.data(), read);
+                    total += read;
+                    if (total > 200ull * 1024 * 1024) break; // runaway response
+                }
+                out.close();
+                // A real installer is an MZ executable and comfortably >1MB.
+                ok = haveMagic && first2[0] == 'M' && first2[1] == 'Z' &&
+                     total > 1024 * 1024 && total <= 200ull * 1024 * 1024;
+            }
+        }
+    }
+
+    if (hRequest) WinHttpCloseHandle(hRequest);
+    if (hConnect) WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+    if (!ok) {
+        std::error_code ec;
+        fs::remove(fs::path(dest), ec); // never leave a half/bogus file behind
+    }
+    return ok;
+}
+#endif
+
+void LicenseManager::startUpdateDownload() {
+#ifdef _WIN32
+    // Idle or Failed (retry) -> Downloading; ignore clicks mid-download.
+    UpdateState cur = m_updateState.load();
+    if (cur == UpdateState::Downloading || cur == UpdateState::Ready) return;
+    m_updateState.store(UpdateState::Downloading);
+
+    std::string url;
+    {
+        std::lock_guard<std::mutex> lock(m_updateMutex);
+        url = m_updateUrl;
+    }
+    if (url.empty()) {
+        m_updateState.store(UpdateState::Failed);
+        return;
+    }
+
+    std::thread([this, url]() {
+        const char* tmp = std::getenv("TEMP");
+        fs::path dest = (tmp ? fs::path(tmp) : fs::path("."))
+                        / "AntigravityVoiceEngine-Update-Setup.exe";
+        std::wstring wUrl(url.begin(), url.end());
+
+        if (httpsDownloadToFile(wUrl, dest.wstring())) {
+            // Launch the installer, then ask the app to close: Inno Setup
+            // can't replace voice-changer.exe while it's running.
+            ShellExecuteA(nullptr, "open", dest.string().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            m_updateState.store(UpdateState::Ready);
+            m_quitForUpdate.store(true);
+        } else {
+            m_updateState.store(UpdateState::Failed);
+        }
+    }).detach();
+#endif
+}
 
 int LicenseManager::verifyOnline(const std::string& key) {
 #ifdef _WIN32

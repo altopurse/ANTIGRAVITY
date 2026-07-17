@@ -97,7 +97,9 @@ int main(int, char**) {
     auto soundboard = std::make_shared<Soundboard>(mixer);
     auto audioEngine = std::make_shared<AudioEngine>(dspGraph, mixer);
 
-    // Populate initial DSP Graph
+    // Populate initial DSP Graph (suppressor first: clean the mic before
+    // anything else shapes or amplifies it)
+    dspGraph->addNode(std::make_unique<NoiseSuppressorNode>());
     dspGraph->addNode(std::make_unique<NoiseGateNode>());
     dspGraph->addNode(std::make_unique<CompressorNode>());
     dspGraph->addNode(std::make_unique<ParametricEQNode>());
@@ -194,6 +196,12 @@ int main(int, char**) {
         
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         glfwSwapBuffers(window);
+
+        // In-app update: once the new installer has been launched, close
+        // normally (config saved below) so it can replace this executable.
+        if (licenseManager->shouldQuitForUpdate()) {
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
+        }
     }
 
     // Persist settings/hotkeys/soundboard state for the next session

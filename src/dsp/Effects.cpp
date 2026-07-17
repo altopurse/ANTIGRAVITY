@@ -2,6 +2,106 @@
 #include <algorithm>
 #include <iostream>
 
+#include <rnnoise.h>
+
+// ==========================================
+// 0. Noise Suppressor (RNNoise)
+// ==========================================
+//
+// RNNoise processes fixed 480-sample frames of 48kHz mono audio, with sample
+// values in 16-bit range (+-32768) as floats. The engine hands us arbitrary
+// interleaved blocks, so each channel keeps a small FIFO: input accumulates
+// until a frame is ready, denoised frames queue on the output side, and the
+// output FIFO is pre-filled with one frame of silence so exactly frameSize
+// samples of latency (10ms) separate input from output at all times. A
+// latency-matched dry copy rides along so Strength can blend the original
+// voice back in without phase smearing.
+
+NoiseSuppressorNode::NoiseSuppressorNode() {
+    m_frameSize = rnnoise_get_frame_size();
+}
+
+NoiseSuppressorNode::~NoiseSuppressorNode() {
+    destroyStates();
+}
+
+void NoiseSuppressorNode::destroyStates() {
+    for (auto& ch : m_ch) {
+        if (ch.st) {
+            rnnoise_destroy(static_cast<DenoiseState*>(ch.st));
+            ch.st = nullptr;
+        }
+    }
+}
+
+void NoiseSuppressorNode::resetChannel(ChannelState& ch) {
+    if (!ch.st) ch.st = rnnoise_create(nullptr);
+    ch.inFifo.clear();
+    // One frame of silence on the output side = the constant latency budget.
+    ch.outFifo.assign(m_frameSize, 0.0f);
+    ch.dryFifo.assign(m_frameSize, 0.0f);
+}
+
+void NoiseSuppressorNode::prepare(double sampleRate) {
+    // RNNoise is trained at 48kHz. Other rates still run (the engine follows
+    // the device's native rate) - suppression quality just degrades a little
+    // at 44.1kHz. Not worth a resampler for a voice app.
+    (void)sampleRate;
+    for (auto& ch : m_ch) resetChannel(ch);
+}
+
+void NoiseSuppressorNode::process(float* buffer, size_t numSamples, int numChannels) {
+    if (!m_enabled) return;
+    // Entitlement gate (check #2 - see DSPGraph::process for #1). Independent
+    // bypass in this translation unit so unlocking premium effects takes
+    // patching every copy, not one.
+    if (!ent::hasFeature(ent::FEAT_ALL_EFFECTS)) return;
+    if (numChannels < 1) return;
+    const int chans = std::min(numChannels, 2);
+    const size_t frames = numSamples / numChannels;
+
+    for (int c = 0; c < chans; ++c) {
+        ChannelState& ch = m_ch[c];
+        if (!ch.st) resetChannel(ch);
+
+        // 1) Queue this block's input (scaled to rnnoise's 16-bit-range floats)
+        for (size_t i = 0; i < frames; ++i) {
+            float s = buffer[i * numChannels + c];
+            ch.inFifo.push_back(s * 32768.0f);
+            ch.dryFifo.push_back(s);
+        }
+
+        // 2) Denoise every complete frame waiting in the input FIFO
+        std::vector<float> in(m_frameSize), out(m_frameSize);
+        while (ch.inFifo.size() >= static_cast<size_t>(m_frameSize)) {
+            std::copy(ch.inFifo.begin(), ch.inFifo.begin() + m_frameSize, in.begin());
+            ch.inFifo.erase(ch.inFifo.begin(), ch.inFifo.begin() + m_frameSize);
+            rnnoise_process_frame(static_cast<DenoiseState*>(ch.st), out.data(), in.data());
+            ch.outFifo.insert(ch.outFifo.end(), out.begin(), out.end());
+        }
+
+        // 3) Emit: denoised signal blended with the latency-matched dry copy.
+        // The one-frame pre-fill guarantees enough queued output exists.
+        const float wetMix = m_strength;
+        const float dryMix = 1.0f - m_strength;
+        for (size_t i = 0; i < frames; ++i) {
+            float wet = ch.outFifo[i] * (1.0f / 32768.0f);
+            float dry = ch.dryFifo[i];
+            buffer[i * numChannels + c] = wet * wetMix + dry * dryMix;
+        }
+        ch.outFifo.erase(ch.outFifo.begin(), ch.outFifo.begin() + frames);
+        ch.dryFifo.erase(ch.dryFifo.begin(), ch.dryFifo.begin() + frames);
+    }
+
+    // More than 2 channels (never happens with mic input, but be safe):
+    // copy channel 0's processed signal into the extras so they aren't stale.
+    for (int c = chans; c < numChannels; ++c) {
+        for (size_t i = 0; i < frames; ++i) {
+            buffer[i * numChannels + c] = buffer[i * numChannels + 0];
+        }
+    }
+}
+
 // ==========================================
 // 1. Noise Gate
 // ==========================================

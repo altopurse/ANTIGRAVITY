@@ -54,3 +54,11 @@ TROUBLESHOOTING
 - Discord echo: make sure Discord's input is CABLE Output, NOT your
   real microphone, and disable Discord's own noise suppression if it
   fights the noise gate.
+
+CREDITS / THIRD-PARTY SOFTWARE
+------------------------------
+The "Noise Suppressor (AI)" effect uses RNNoise by Jean-Marc Valin /
+the Xiph.Org Foundation (https://github.com/xiph/rnnoise), used under
+the BSD 3-Clause license. Copyright (c) 2017-2024, Xiph.Org Foundation.
+Redistribution and use permitted under the terms of that license; see
+https://github.com/xiph/rnnoise/blob/main/COPYING for the full text.

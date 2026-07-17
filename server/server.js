@@ -415,7 +415,7 @@ app.get("/", async (req, res) => {
          <a class="btn big" href="/download">Download for Windows - Free</a>
          ${proof}
          <p class="muted" style="margin-top:12px">Free forever: Reverb + Pitch Shifter and 2 soundboard clips.
-         Unlock all 8 effects and unlimited sounds with a one-time £10 Pro key (or £0.80 first month, then £3/mo).
+         Unlock all 9 effects and unlimited sounds with a one-time £10 Pro key (or £0.80 first month, then £3/mo).
          Works with Discord, Zoom, OBS, and any game.</p>
        </div>
 
@@ -466,7 +466,7 @@ app.get("/", async (req, res) => {
            <div style="text-align:center;font-weight:600;margin-bottom:6px;color:#a794ff">Pro</div>
            <ul class="features" style="grid-template-columns:1fr">
              <li><strong>Everything in Free, plus:</strong></li>
-             <li>All 8 effects (EQ, compressor, robot, distortion, telephone…)</li>
+             <li>All 9 effects (AI noise remover, EQ, compressor, robot, distortion…)</li>
              <li>Unlimited soundboard clips</li>
              <li>Every future effect, included</li>
            </ul>
@@ -518,6 +518,7 @@ app.get("/", async (req, res) => {
        </div>
 
        <footer>Antigravity Voice Engine · <a href="/download" style="color:#5a5a68">Download</a>
+         · <a href="/recover" style="color:#5a5a68">Lost key?</a>
          · <a href="/legal" style="color:#5a5a68">Terms &amp; Privacy</a></footer>`,
       { wide: true }
     )
@@ -737,8 +738,10 @@ app.get("/key", async (req, res, next) => {
            <code class="key">${makeKey(pid)}</code>
            <p>Open <strong>Antigravity Voice Engine</strong>, paste the key into the
            activation screen and press <strong>Activate</strong>.</p>
-           <p class="muted">Save this key somewhere safe – this page won't be reachable
-           forever, but ${subNote}</p>`
+           <p class="muted"><strong>Save this key somewhere safe now</strong> (password manager,
+           notes app) – this page won't be reachable forever, but ${subNote}</p>
+           <p class="muted">Lose it anyway? This browser can get it back any time at
+           <a href="/recover" style="color:#8a74ff">${BASE_URL.replace(/^https?:\/\//, "")}/recover</a>.</p>`
         )
       );
     }
@@ -765,6 +768,50 @@ app.get("/key", async (req, res, next) => {
     );
   } catch (err) {
     next(err);
+  }
+});
+
+// Lost-key recovery. The purchase flow stores visitor:<vid> -> key, and the
+// vid cookie lives for 2 years, so the browser that bought can always get its
+// own key back without accounts or email. Only that browser: the vid is a
+// 64-bit random cookie value, not something a stranger can guess or look up.
+app.get("/recover", async (req, res) => {
+  if (!rateAllow("recover", req, 10, 60 * 60 * 1000)) {
+    return res.status(429).send(page("Slow down",
+      `<h1>Too many attempts</h1><p class="muted">Wait a bit and try again.</p>`));
+  }
+  trackView(req, res, "recover");
+
+  const supportNote = `
+    <h2>Different browser or PC?</h2>
+    <p class="muted">Recovery works from the browser you bought in (it remembers the purchase).
+    If you're somewhere else, email us via the address on your Mollie/PayPal payment receipt and
+    quote the payment date and amount - we'll look your key up and send it back.</p>
+    <p style="margin-top:24px"><a class="btn ghost" href="/">← Back</a></p>`;
+
+  if (!bindingEnabled) {
+    return res.send(page("Recover your key", `<h1>Recover your key</h1>
+      <p class="muted">Automatic recovery isn't available right now.</p>${supportNote}`));
+  }
+  try {
+    const m = /(?:^|;\s*)vid=([A-Za-z0-9]{16})/.exec(String(req.headers.cookie || ""));
+    const vid = m ? m[1] : "";
+    const key = vid ? await redis(["HGET", "visitor:" + vid, "key"]) : null;
+    if (key) {
+      return res.send(page("Your license key", `<h1>Found it!</h1>
+        <p>This browser bought the following Pro key:</p>
+        <code class="key">${key}</code>
+        <p class="muted">Paste it into the app's activation screen. Save it somewhere safe this time -
+        a password manager or a note works great.</p>
+        <p style="margin-top:24px"><a class="btn ghost" href="/">← Back</a></p>`));
+    }
+    res.send(page("Recover your key", `<h1>No purchase found in this browser</h1>
+      <p class="muted">We couldn't find a Pro purchase made from this browser (cookies may have
+      been cleared).</p>${supportNote}`));
+  } catch (err) {
+    console.error("recover failed:", err.message);
+    res.status(500).send(page("Recover your key", `<h1>Recovery temporarily unavailable</h1>
+      <p class="muted">Please try again in a few minutes.</p>${supportNote}`));
   }
 });
 

@@ -15,6 +15,53 @@ if (-not (Test-Path $exe)) {
     exit 1
 }
 
+# ---------------------------------------------------------------------------
+# Code signing (optional but strongly recommended - removes the SmartScreen
+# "unknown publisher" wall). Configured entirely via environment variables so
+# no secrets ever live in the repo. Two modes (see docs/code-signing.md):
+#
+#   1) PFX certificate file:
+#        CODESIGN_PFX          = C:\path\to\cert.pfx
+#        CODESIGN_PFX_PASSWORD = <password>
+#   2) Azure Trusted Signing (or any custom pipeline):
+#        CODESIGN_CMD = full command line; {file} is replaced with the target
+#        e.g. signtool sign /v /fd SHA256 /tr http://timestamp.acs.microsoft.com
+#             /td SHA256 /dlib "...\Azure.CodeSigning.Dlib.dll"
+#             /dmdf "...\metadata.json" {file}
+#
+# If neither is set, packaging proceeds unsigned with a reminder.
+# NOTE: the exe is signed BEFORE the installer packs it and before the
+# anti-tamper self-hash is computed, so the shipped hash matches what users run.
+# ---------------------------------------------------------------------------
+function Invoke-CodeSign {
+    param([string]$Path)
+    if ($env:CODESIGN_CMD) {
+        $cmd = $env:CODESIGN_CMD.Replace("{file}", '"' + $Path + '"')
+        Write-Output "Signing (custom cmd): $Path"
+        cmd /c $cmd
+        if ($LASTEXITCODE -ne 0) { Write-Error "Code signing failed for $Path"; exit 1 }
+        return
+    }
+    if ($env:CODESIGN_PFX) {
+        $signtool = (Get-Command signtool -ErrorAction SilentlyContinue).Source
+        if (-not $signtool) {
+            # Fall back to the newest Windows SDK copy
+            $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue |
+                Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+        }
+        if (-not $signtool) { Write-Error "signtool.exe not found (install the Windows 10/11 SDK)"; exit 1 }
+        Write-Output "Signing (PFX): $Path"
+        & $signtool sign /f $env:CODESIGN_PFX /p $env:CODESIGN_PFX_PASSWORD `
+            /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $Path
+        if ($LASTEXITCODE -ne 0) { Write-Error "Code signing failed for $Path"; exit 1 }
+        return
+    }
+    Write-Output "NOTE: shipping UNSIGNED ($([System.IO.Path]::GetFileName($Path))) - users will hit SmartScreen."
+    Write-Output "      See docs/code-signing.md to set up signing (~10 GBP/month, big conversion win)."
+}
+
+Invoke-CodeSign -Path $exe
+
 # Fresh dist folder
 $dist = Join-Path $root "dist"
 if (Test-Path $dist) {
@@ -87,6 +134,10 @@ if ($LASTEXITCODE -ne 0) {
     Write-Error "Inno Setup compilation failed."
     exit 1
 }
+
+# Sign the installer itself too (the file users actually download and run -
+# this is what SmartScreen judges first).
+Invoke-CodeSign -Path (Join-Path $dist "AntigravityVoiceEngine-Setup.exe")
 
 # The sounds were only needed as compile inputs; ship a clean single file.
 Remove-Item -Recurse -Force (Join-Path $dist "sounds")

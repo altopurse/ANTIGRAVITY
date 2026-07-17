@@ -21,7 +21,9 @@ struct ParamRef {
 // step needed to make it persist.
 std::vector<ParamRef> collectParams(DSPNode* node) {
     std::vector<ParamRef> out;
-    if (auto* g = dynamic_cast<NoiseGateNode*>(node)) {
+    if (auto* ns = dynamic_cast<NoiseSuppressorNode*>(node)) {
+        out = {{"strength", &ns->m_strength}};
+    } else if (auto* g = dynamic_cast<NoiseGateNode*>(node)) {
         out = {{"thresholdDB", &g->m_thresholdDB}, {"releaseMs", &g->m_releaseMs}};
     } else if (auto* c = dynamic_cast<CompressorNode*>(node)) {
         out = {{"thresholdDB", &c->m_thresholdDB}, {"ratio", &c->m_ratio},
@@ -61,6 +63,7 @@ std::string presetsFilePath() {
 
 std::unique_ptr<DSPGraph> makeDefaultGraph() {
     auto g = std::make_unique<DSPGraph>();
+    g->addNode(std::make_unique<NoiseSuppressorNode>());
     g->addNode(std::make_unique<NoiseGateNode>());
     g->addNode(std::make_unique<CompressorNode>());
     g->addNode(std::make_unique<ParametricEQNode>());
@@ -90,6 +93,11 @@ const std::vector<std::pair<std::string, std::string>>& factoryPresets() {
         };
 
         add("Clean (Default)", [](DSPGraph&) {});
+        add("Studio Clean Mic", [](DSPGraph& g) {
+            // No voice change at all - just the AI denoiser. The preset that
+            // makes the app useful to people who want a clean mic, period.
+            findNode<NoiseSuppressorNode>(g)->m_enabled = true;
+        });
         add("Deep Voice", [](DSPGraph& g) {
             findNode<PitchShifterNode>(g)->m_pitchFactor = 0.72f;
         });

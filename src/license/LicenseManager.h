@@ -59,6 +59,17 @@ public:
     std::string getUpdateVersion();
     void openUpdatePage();
 
+    // In-app update: downloads the new installer to %TEMP% in the background,
+    // launches it, and asks the app to close (the installer can't overwrite a
+    // running exe). Falls back to nothing on failure - the UI then offers the
+    // browser instead. One click instead of browser -> download -> find file.
+    enum class UpdateState { Idle, Downloading, Ready, Failed };
+    void startUpdateDownload();
+    UpdateState getUpdateState() const { return m_updateState.load(); }
+    // True once the installer has been launched: the main loop should close
+    // the window so the installer can replace voice-changer.exe.
+    bool shouldQuitForUpdate() const { return m_quitForUpdate.load(); }
+
     Status getStatus() const { return m_status.load(); }
 
     // "lifetime" or "monthly" (empty until the first successful verify with
@@ -111,4 +122,8 @@ private:
     std::mutex m_updateMutex;
     std::string m_updateVersion;
     std::string m_updateUrl;
+
+    // In-app updater state
+    std::atomic<UpdateState> m_updateState{UpdateState::Idle};
+    std::atomic<bool> m_quitForUpdate{false};
 };

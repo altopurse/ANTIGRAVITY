@@ -66,6 +66,19 @@ inline bool hasFeature(uint32_t bit) {
 // drops to FREE otherwise (the app stays usable at the free tier).
 void setLicensed(bool entitled);
 
+// ---- Pro trial (one per app session, no persistence) ----
+// The sale happens in the ear: a free user who *hears* the Robot/Distortion/
+// Telephone effects live converts far better than one reading a locked list.
+// startTrial grants FULL for `seconds`; when it lapses tickTrial drops back
+// to FREE (unless a real license arrived meanwhile). Deliberately session-
+// scoped: restarting the app re-arms it - generous, but the point is selling
+// the sound, not building trial DRM (the whole client is patchable anyway).
+bool startTrial(int seconds);   // false if already used or already licensed
+void tickTrial();               // call every UI frame; handles expiry
+bool trialActive();
+int  trialSecondsLeft();        // 0 when inactive
+bool trialUsed();               // true once startTrial succeeded this session
+
 // Directly set the entitlement mask (server-driven, future per-plan masks).
 void setEntitlement(uint32_t mask);
 

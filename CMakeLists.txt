@@ -79,6 +79,64 @@ if(NOT EXISTS ${STB_IMAGE_H})
     endif()
 endif()
 
+# 4. Fetch RNNoise (deep-learning noise suppression, BSD-licensed).
+# The v0.2 release tarball ships the pretrained model as generated C sources
+# (rnnoise_data.c), so no model download step is needed. Downloaded manually
+# (not FetchContent) because CMake's bundled GnuTLS can't verify GitHub's cert
+# chain on some MinGW installs - the system curl can, and the pinned SHA256 is
+# enforced regardless of which downloader fetched the file.
+set(RNNOISE_URL "https://github.com/xiph/rnnoise/releases/download/v0.2/rnnoise-0.2.tar.gz")
+set(RNNOISE_SHA256 "90fce4b00b9ff24c08dbfe31b82ffd43bae383d85c5535676d28b0a2b11c0d37")
+set(RNNOISE_TARBALL ${CMAKE_BINARY_DIR}/rnnoise-0.2.tar.gz)
+set(rnnoise_SOURCE_DIR ${CMAKE_BINARY_DIR}/rnnoise-0.2)
+
+if(NOT EXISTS ${rnnoise_SOURCE_DIR}/src/denoise.c)
+    if(NOT EXISTS ${RNNOISE_TARBALL})
+        message(STATUS "Downloading RNNoise 0.2...")
+        file(DOWNLOAD ${RNNOISE_URL} ${RNNOISE_TARBALL} STATUS RNNOISE_DL_STATUS TLS_VERIFY ON)
+        list(GET RNNOISE_DL_STATUS 0 RNNOISE_DL_CODE)
+        if(NOT RNNOISE_DL_CODE EQUAL 0)
+            file(REMOVE ${RNNOISE_TARBALL})
+            find_program(CURL_EXE curl)
+            if(CURL_EXE)
+                message(STATUS "CMake download failed, retrying with system curl...")
+                execute_process(COMMAND ${CURL_EXE} -fsSL -o ${RNNOISE_TARBALL} ${RNNOISE_URL}
+                                RESULT_VARIABLE RNNOISE_CURL_CODE)
+                if(NOT RNNOISE_CURL_CODE EQUAL 0)
+                    file(REMOVE ${RNNOISE_TARBALL})
+                endif()
+            endif()
+        endif()
+        if(NOT EXISTS ${RNNOISE_TARBALL})
+            message(FATAL_ERROR "Failed to download RNNoise. Download it manually from "
+                                "${RNNOISE_URL} and place it at ${RNNOISE_TARBALL}, then re-run CMake.")
+        endif()
+    endif()
+    # Integrity check before extracting anything, whatever fetched the file
+    file(SHA256 ${RNNOISE_TARBALL} RNNOISE_ACTUAL_SHA256)
+    if(NOT RNNOISE_ACTUAL_SHA256 STREQUAL RNNOISE_SHA256)
+        file(REMOVE ${RNNOISE_TARBALL})
+        message(FATAL_ERROR "RNNoise tarball hash mismatch (got ${RNNOISE_ACTUAL_SHA256}). "
+                            "Deleted the bad file - re-run CMake to retry the download.")
+    endif()
+    file(ARCHIVE_EXTRACT INPUT ${RNNOISE_TARBALL} DESTINATION ${CMAKE_BINARY_DIR})
+endif()
+
+# Plain-C portable build: everything in src/ except the two training/dev tools
+# (which have their own main()) and the x86/ runtime-dispatch variants.
+set(RNNOISE_SOURCES
+    ${rnnoise_SOURCE_DIR}/src/denoise.c
+    ${rnnoise_SOURCE_DIR}/src/rnn.c
+    ${rnnoise_SOURCE_DIR}/src/pitch.c
+    ${rnnoise_SOURCE_DIR}/src/kiss_fft.c
+    ${rnnoise_SOURCE_DIR}/src/celt_lpc.c
+    ${rnnoise_SOURCE_DIR}/src/nnet.c
+    ${rnnoise_SOURCE_DIR}/src/nnet_default.c
+    ${rnnoise_SOURCE_DIR}/src/parse_lpcnet_weights.c
+    ${rnnoise_SOURCE_DIR}/src/rnnoise_data.c
+    ${rnnoise_SOURCE_DIR}/src/rnnoise_tables.c
+)
+
 # Find OpenGL
 find_package(OpenGL REQUIRED)
 
@@ -100,9 +158,10 @@ file(GLOB_RECURSE APP_SOURCES
 )
 
 # Create Executable
-add_executable(voice-changer 
+add_executable(voice-changer
     ${APP_SOURCES}
     ${IMGUI_SOURCES}
+    ${RNNOISE_SOURCES}
 )
 
 # Include Directories
@@ -112,6 +171,8 @@ target_include_directories(voice-changer PRIVATE
     ${imgui_SOURCE_DIR}/backends
     ${MINIAUDIO_DIR}
     ${STB_DIR}
+    ${rnnoise_SOURCE_DIR}/include
+    ${rnnoise_SOURCE_DIR}/src
 )
 
 # Link Libraries
@@ -121,7 +182,7 @@ target_link_libraries(voice-changer PRIVATE
 )
 
 # App version (sent to the license server for per-key analytics)
-target_compile_definitions(voice-changer PRIVATE APP_VERSION="2.3.0")
+target_compile_definitions(voice-changer PRIVATE APP_VERSION="2.4.0")
 
 # Windows-specific configurations
 if(WIN32)

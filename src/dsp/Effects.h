@@ -98,6 +98,38 @@ public:
     }
 };
 
+// 0. Noise Suppressor (RNNoise - recurrent-neural-net denoiser). Unlike the
+// gate (which just mutes below a threshold), this removes steady background
+// noise (fans, hum, hiss, keyboard rumble) WHILE speech is happening.
+// Runs on 480-sample frames at 48kHz internally; a small FIFO adapts the
+// engine's block size to that, costing a fixed 10ms of latency when enabled.
+class NoiseSuppressorNode : public DSPNode {
+public:
+    NoiseSuppressorNode();
+    ~NoiseSuppressorNode() override;
+    void prepare(double sampleRate) override;
+    void process(float* buffer, size_t numSamples, int numChannels) override;
+    const char* getName() const override { return "Noise Suppressor (AI)"; }
+    bool& isEnabled() override { return m_enabled; }
+    uint32_t requiredFeature() const override { return ent::FEAT_ALL_EFFECTS; }
+
+    bool m_enabled = false;
+    float m_strength = 1.0f; // 0 = bypass blend, 1 = fully denoised
+
+private:
+    struct ChannelState {
+        void* st = nullptr;             // DenoiseState* (opaque - C API)
+        std::vector<float> inFifo;      // pending input, rnnoise scale (+-32768)
+        std::vector<float> outFifo;     // denoised output, rnnoise scale
+        std::vector<float> dryFifo;     // latency-matched dry copy for blending
+    };
+    ChannelState m_ch[2];
+    int m_frameSize = 480;
+
+    void resetChannel(ChannelState& ch);
+    void destroyStates();
+};
+
 // 1. Noise Gate
 class NoiseGateNode : public DSPNode {
 public:
