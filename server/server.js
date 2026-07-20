@@ -444,6 +444,9 @@ app.get("/", async (req, res) => {
          low-latency app. Sound like a monster, a robot, or a chipmunk - and fire off sound effects -
          live in Discord, games, Zoom and OBS. No account, no subscription trap.</p>
          <a class="btn big" href="/download">Download for Windows - Free</a>
+         <div style="margin-top:12px">
+           <a class="btn ghost" href="/voice-changer">Or try the voice changer in your browser →</a>
+         </div>
          ${proof}
          <p class="muted" style="margin-top:12px">Free forever: Reverb + Pitch Shifter and 2 soundboard clips.
          Unlock all 9 effects and unlimited sounds with a one-time £10 Pro key (or £0.80 first month, then £3/mo).
@@ -562,11 +565,41 @@ app.get("/", async (req, res) => {
        </div>
 
        <footer>Antigravity Voice Engine · <a href="/download" style="color:#5a5a68">Download</a>
+         · <a href="/voice-changer" style="color:#5a5a68">Web voice changer</a>
          · <a href="/partners" style="color:#5a5a68">Streamers</a>
          · <a href="/recover" style="color:#5a5a68">Lost key?</a>
          · <a href="/legal" style="color:#5a5a68">Terms &amp; Privacy</a></footer>`,
       { wide: true }
     )
+  );
+});
+
+// Free in-browser voice changer ("Antigravity Web") - the SEO traffic tool.
+// All audio processing happens client-side (Web Audio API), so this route just
+// serves a static page; a million visits cost the server nothing. The canonical
+// URL is stamped in at request time so the page works on any BASE_URL.
+const vcHtmlRaw = fs.readFileSync(path.join(__dirname, "public", "voice-changer.html"), "utf8");
+app.get("/voice-changer", (req, res) => {
+  trackView(req, res, "webtool");
+  const site = BASE_URL || `http://localhost:${PORT}`;
+  res.type("html").send(vcHtmlRaw.replaceAll("__BASE_URL__", site));
+});
+
+// SEO plumbing: robots.txt + sitemap.xml (submit the sitemap in Google Search
+// Console once, then every new public page gets discovered automatically).
+app.get("/robots.txt", (req, res) => {
+  const site = BASE_URL || `http://localhost:${PORT}`;
+  res.type("text/plain").send(
+    `User-agent: *\nDisallow: /admin\nDisallow: /api/\nDisallow: /key\nDisallow: /login\nAllow: /\n\nSitemap: ${site}/sitemap.xml\n`
+  );
+});
+app.get("/sitemap.xml", (req, res) => {
+  const site = BASE_URL || `http://localhost:${PORT}`;
+  const urls = ["/", "/voice-changer", "/partners", "/legal"];
+  res.type("application/xml").send(
+    `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
+    urls.map((u) => `  <url><loc>${site}${u}</loc></url>`).join("\n") +
+    `\n</urlset>\n`
   );
 });
 

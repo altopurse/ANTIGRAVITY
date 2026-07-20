@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Free Online Voice Changer - No Download Needed | Antigravity Web</title>
+<meta name="description" content="Change your voice online for free: robot, chipmunk, deep, demon, echo and more. Runs in your browser - record with your mic or upload a file, hear it instantly, download the result. No signup.">
+<link rel="canonical" href="__BASE_URL__/voice-changer">
+<link rel="icon" href="/favicon.ico">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Antigravity Voice Engine">
+<meta property="og:title" content="Free Online Voice Changer - Antigravity Web">
+<meta property="og:description" content="Change your voice to robot, chipmunk, demon and more - right in your browser. Free, no signup, no download.">
+<meta property="og:image" content="__BASE_URL__/og.png">
+<meta property="og:url" content="__BASE_URL__/voice-changer">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Free Online Voice Changer - Antigravity Web">
+<meta name="twitter:description" content="Change your voice to robot, chipmunk, demon and more - right in your browser. Free, no signup.">
+<meta name="twitter:image" content="__BASE_URL__/og.png">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"WebApplication","name":"Antigravity Web Voice Changer",
+"url":"__BASE_URL__/voice-changer","applicationCategory":"MultimediaApplication",
+"operatingSystem":"Any (runs in browser)","offers":{"@type":"Offer","price":"0","priceCurrency":"GBP"},
+"description":"Free online voice changer. Record your microphone or upload audio, apply robot, chipmunk, deep, demon, echo and other effects, and download the result. Audio is processed locally in your browser and never uploaded."}
+</script>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[
+{"@type":"Question","name":"Is this voice changer really free?","acceptedAnswer":{"@type":"Answer","text":"Yes. The web voice changer is completely free with no signup, no watermark and no time limit. It is the browser version of Antigravity Voice Engine, a free Windows voice changer app."}},
+{"@type":"Question","name":"Is my voice uploaded to a server?","acceptedAnswer":{"@type":"Answer","text":"No. All audio processing happens locally in your browser using the Web Audio API. Your recordings never leave your device."}},
+{"@type":"Question","name":"Can I use it live in Discord or games?","acceptedAnswer":{"@type":"Answer","text":"The web version records and converts audio files. To change your voice live in Discord, games, Zoom or OBS, download the free Antigravity Voice Engine app for Windows - it applies the same effects in real time to your microphone."}},
+{"@type":"Question","name":"What format is the downloaded audio?","acceptedAnswer":{"@type":"Answer","text":"Recordings and converted files download as standard WAV audio, which every editor, DAW and messaging app can play."}}]}
+</script>
+<style>
+  *{box-sizing:border-box}
+  body{font-family:system-ui,sans-serif;background:#0f0f14;color:#f2f2f7;display:flex;justify-content:center;padding:48px 16px;margin:0}
+  main{max-width:760px;width:100%}
+  h1{color:#8a74ff;font-size:1.7rem;margin:0 0 4px;text-align:center}
+  h2{font-size:1.15rem;margin:36px 0 12px}
+  p.muted{color:#9a9aa5}
+  a{color:#a794ff}
+  .tagline{text-align:center;color:#c7c7d1;max-width:520px;margin:8px auto 24px}
+  .card{background:#161620;border:1px solid #2e2e3e;border-radius:12px;padding:22px}
+  .btn{display:inline-block;background:#6d5ae0;color:#fff;border:none;border-radius:8px;padding:12px 24px;font-size:1rem;text-decoration:none;cursor:pointer;font-family:inherit}
+  .btn:hover{background:#8a74ff}
+  .btn.ghost{background:#1c1c26;border:1px solid #2e2e3e;color:#f2f2f7}
+  .btn.ghost:hover{background:#26263a}
+  .btn.rec{background:#c0392b}.btn.rec:hover{background:#e74c3c}
+  .btn:disabled{opacity:0.45;cursor:not-allowed}
+  .modes{display:flex;gap:10px;justify-content:center;margin-bottom:18px;flex-wrap:wrap}
+  .fx{display:grid;grid-template-columns:repeat(auto-fill,minmax(105px,1fr));gap:10px;margin:16px 0}
+  .fx button{background:#1c1c26;border:1px solid #2e2e3e;border-radius:10px;color:#f2f2f7;padding:12px 6px;cursor:pointer;font-family:inherit;font-size:0.9rem;text-align:center}
+  .fx button .em{display:block;font-size:1.4rem;margin-bottom:4px}
+  .fx button:hover{border-color:#8a74ff}
+  .fx button.on{background:rgba(138,116,255,0.18);border-color:#8a74ff;color:#fff}
+  .controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:14px}
+  #status{color:#9a9aa5;font-size:0.9rem;margin-top:12px;min-height:1.2em}
+  audio{width:100%;margin-top:12px}
+  label.chk{color:#c7c7d1;font-size:0.9rem;display:inline-flex;gap:6px;align-items:center;cursor:pointer}
+  .cta{background:rgba(138,116,255,0.10);border:1px solid rgba(138,116,255,0.4);border-radius:12px;padding:20px;text-align:center;margin-top:36px}
+  footer{margin-top:40px;color:#5a5a68;font-size:0.85rem;text-align:center}
+  footer a{color:#5a5a68}
+  ul.plain{color:#c7c7d1;line-height:1.7}
+</style></head><body><main>
+
+<h1>Free Online Voice Changer</h1>
+<p class="tagline">Turn your voice into a robot, chipmunk, demon and more - right here in your
+browser. Free, no signup, and your audio <strong>never leaves your device</strong>.</p>
+
+<div class="card">
+  <div class="modes">
+    <button class="btn ghost on" id="modeMic">🎙️ Use my microphone</button>
+    <button class="btn ghost" id="modeFile">📁 Upload an audio file</button>
+    <input type="file" id="fileInput" accept="audio/*" style="display:none">
+  </div>
+
+  <div style="text-align:center;color:#c7c7d1;font-size:0.95rem">Pick an effect:</div>
+  <div class="fx" id="fxGrid"></div>
+
+  <div class="controls" id="micControls">
+    <button class="btn" id="recBtn">● Record</button>
+    <label class="chk"><input type="checkbox" id="monitorChk"> Hear myself live (use headphones!)</label>
+  </div>
+  <div class="controls" id="fileControls" style="display:none">
+    <button class="btn" id="previewBtn">▶ Preview</button>
+    <button class="btn ghost" id="downloadBtn">⬇ Download converted WAV</button>
+  </div>
+
+  <div id="status"></div>
+  <div id="result"></div>
+</div>
+
+<div class="cta">
+  <div style="font-weight:600;font-size:1.05rem;margin-bottom:6px">Want this voice live in Discord &amp; games?</div>
+  <p class="muted" style="margin:0 0 14px">This page records and converts audio. The free
+  <strong style="color:#f2f2f7">Antigravity Voice Engine</strong> app for Windows applies the same
+  effects to your mic <strong style="color:#f2f2f7">in real time</strong> - so everyone in Discord,
+  Zoom or your game hears your new voice while you talk. Plus a soundboard with hotkeys.</p>
+  <a class="btn" href="/download">Download free for Windows</a>
+  <a class="btn ghost" href="/" style="margin-left:8px">Learn more</a>
+</div>
+
+<div style="margin:36px 0 8px">
+<div id="frame" style="width:100%;margin:auto;position:relative;z-index:99998">
+  <iframe data-aa='2447478' src='//acceptable.a-ads.com/2447478/?size=Adaptive'
+    style='border:0;padding:0;width:70%;height:auto;overflow:hidden;display:block;margin:auto'></iframe>
+</div>
+</div>
+
+<h2>How to change your voice online</h2>
+<ul class="plain">
+  <li><strong>1. Choose your input</strong> - record straight from your microphone, or upload any audio file (MP3, WAV, OGG, M4A…).</li>
+  <li><strong>2. Pick an effect</strong> - Robot, Chipmunk, Deep, Demon, Monster, Alien, Cave, Echo, Radio and more.</li>
+  <li><strong>3. Record or preview</strong> - hear the result instantly.</li>
+  <li><strong>4. Download</strong> - grab your converted voice as a WAV file and use it anywhere: memes, videos, Discord, TikTok, gaming clips.</li>
+</ul>
+
+<h2>Private by design</h2>
+<p class="muted">Unlike most "online voice changers", this tool does all processing locally in your
+browser with the Web Audio API. Nothing is uploaded, nothing is stored, and it even works offline
+once the page has loaded.</p>
+
+<h2>Frequently asked questions</h2>
+<div class="card" style="margin-bottom:12px"><strong>Is it really free?</strong>
+<p class="muted" style="margin-bottom:0">Yes - free, no signup, no watermark, no limits. It's the web version of our free Windows app.</p></div>
+<div class="card" style="margin-bottom:12px"><strong>Is my voice uploaded anywhere?</strong>
+<p class="muted" style="margin-bottom:0">No. Audio is processed on your device and never sent to a server.</p></div>
+<div class="card" style="margin-bottom:12px"><strong>Can I use it live in Discord or games?</strong>
+<p class="muted" style="margin-bottom:0">That's what the <a href="/download">free Windows app</a> is for - it changes your real microphone in real time, so it works in every game and app. The web version is for recording and converting clips.</p></div>
+<div class="card"><strong>What do I get when I download the result?</strong>
+<p class="muted" style="margin-bottom:0">A standard WAV file that plays everywhere and imports into any video editor.</p></div>
+
+<footer>Antigravity Voice Engine · <a href="/">Home</a> · <a href="/download">Download app</a>
+· <a href="/partners">Streamers</a> · <a href="/legal">Terms &amp; Privacy</a></footer>
+</main>
+
+<script>
+"use strict";
+// ---------- effect definitions ----------
+// Every effect is a list of stage builders; each builder returns {in, out}
+// AudioNodes. Chains are rebuilt per AudioContext so the same definitions
+// drive live mic monitoring AND offline file rendering.
+
+function G(c, v) { const g = c.createGain(); if (v !== undefined) g.gain.value = v; return g; }
+
+// Delay-line pitch shifter ("Jungle", after the classic Chrome WebAudio demo).
+function createFadeBuffer(c, activeTime, fadeTime) {
+  const len1 = Math.floor(activeTime * c.sampleRate);
+  const len = len1 + Math.floor((activeTime - 2 * fadeTime) * c.sampleRate);
+  const buf = c.createBuffer(1, len, c.sampleRate);
+  const p = buf.getChannelData(0);
+  const fadeLen = fadeTime * c.sampleRate;
+  const fadeIn = fadeLen, fadeOut = len1 - fadeLen;
+  for (let i = 0; i < len1; i++) {
+    p[i] = i < fadeIn ? Math.sqrt(i / fadeLen)
+         : i >= fadeOut ? Math.sqrt(1 - (i - fadeOut) / fadeLen) : 1;
+  }
+  return buf;
+}
+function createDelayTimeBuffer(c, activeTime, fadeTime, shiftUp) {
+  const len1 = Math.floor(activeTime * c.sampleRate);
+  const len = len1 + Math.floor((activeTime - 2 * fadeTime) * c.sampleRate);
+  const buf = c.createBuffer(1, len, c.sampleRate);
+  const p = buf.getChannelData(0);
+  for (let i = 0; i < len1; i++) p[i] = shiftUp ? (len1 - i) / len : i / len1;
+  return buf;
+}
+function fxPitch(c, offset) { // offset in [-1, 1]: negative = deeper, positive = higher
+  const bufferTime = 0.100, fadeTime = 0.050;
+  const input = G(c), output = G(c);
+  const down = createDelayTimeBuffer(c, bufferTime, fadeTime, false);
+  const up = createDelayTimeBuffer(c, bufferTime, fadeTime, true);
+  const modBuf = offset > 0 ? up : down;
+  const mod1 = c.createBufferSource(), mod2 = c.createBufferSource();
+  mod1.buffer = modBuf; mod2.buffer = modBuf; mod1.loop = mod2.loop = true;
+  const depth = 0.100 * Math.abs(offset);
+  const mg1 = G(c, 0.5 * depth), mg2 = G(c, 0.5 * depth);
+  const d1 = c.createDelay(1), d2 = c.createDelay(1);
+  mod1.connect(mg1); mod2.connect(mg2);
+  mg1.connect(d1.delayTime); mg2.connect(d2.delayTime);
+  const fadeBuf = createFadeBuffer(c, bufferTime, fadeTime);
+  const f1 = G(c, 0), f2 = G(c, 0);
+  const fs1 = c.createBufferSource(), fs2 = c.createBufferSource();
+  fs1.buffer = fadeBuf; fs2.buffer = fadeBuf; fs1.loop = fs2.loop = true;
+  fs1.connect(f1.gain); fs2.connect(f2.gain);
+  input.connect(d1); input.connect(d2);
+  d1.connect(f1); d2.connect(f2);
+  f1.connect(output); f2.connect(output);
+  const t = c.currentTime + 0.05, t2 = t + bufferTime - fadeTime;
+  mod1.start(t); mod2.start(t2); fs1.start(t); fs2.start(t2);
+  return { in: input, out: output };
+}
+function fxRing(c, freq) { // ring modulator (robot/alien voices)
+  const input = G(c), output = G(c);
+  const ring = G(c, 0);
+  const osc = c.createOscillator();
+  osc.type = "sine"; osc.frequency.value = freq;
+  osc.connect(ring.gain); osc.start();
+  input.connect(ring); ring.connect(output);
+  return { in: input, out: output };
+}
+function fxDist(c, k) {
+  const ws = c.createWaveShaper();
+  const n = 2048, curve = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const x = (i * 2) / n - 1;
+    curve[i] = ((3 + k) * x * 20 * (Math.PI / 180)) / (Math.PI + k * Math.abs(x));
+  }
+  ws.curve = curve; ws.oversample = "2x";
+  return { in: ws, out: ws };
+}
+function fxFilter(c, type, freq, q) {
+  const f = c.createBiquadFilter();
+  f.type = type; f.frequency.value = freq; if (q) f.Q.value = q;
+  return { in: f, out: f };
+}
+function fxReverb(c, seconds, decay, wet) {
+  const input = G(c), output = G(c);
+  const rate = c.sampleRate, len = Math.floor(rate * seconds);
+  const ir = c.createBuffer(2, len, rate);
+  for (let ch = 0; ch < 2; ch++) {
+    const p = ir.getChannelData(ch);
+    for (let i = 0; i < len; i++) p[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+  }
+  const conv = c.createConvolver(); conv.buffer = ir;
+  const wetG = G(c, wet), dryG = G(c, 1 - wet * 0.4);
+  input.connect(dryG); dryG.connect(output);
+  input.connect(conv); conv.connect(wetG); wetG.connect(output);
+  return { in: input, out: output };
+}
+function fxEcho(c, time, feedback) {
+  const input = G(c), output = G(c);
+  const delay = c.createDelay(2); delay.delayTime.value = time;
+  const fb = G(c, feedback), wet = G(c, 0.6);
+  input.connect(output);
+  input.connect(delay); delay.connect(fb); fb.connect(delay);
+  delay.connect(wet); wet.connect(output);
+  return { in: input, out: output };
+}
+
+const EFFECTS = [
+  { id: "normal",   name: "Normal",   em: "🙂", make: c => [] },
+  { id: "deep",     name: "Deep",     em: "🎩", make: c => [fxPitch(c, -0.5)] },
+  { id: "chipmunk", name: "Chipmunk", em: "🐿️", make: c => [fxPitch(c, 0.5)] },
+  { id: "helium",   name: "Helium",   em: "🎈", make: c => [fxPitch(c, 0.72)] },
+  { id: "demon",    name: "Demon",    em: "😈", make: c => [fxPitch(c, -0.62), fxFilter(c, "lowpass", 2400, 0.8)] },
+  { id: "monster",  name: "Monster",  em: "👹", make: c => [fxPitch(c, -0.72), fxDist(c, 18), fxFilter(c, "lowpass", 3200, 0.7)] },
+  { id: "robot",    name: "Robot",    em: "🤖", make: c => [fxRing(c, 55), fxDist(c, 6)] },
+  { id: "alien",    name: "Alien",    em: "👽", make: c => [fxPitch(c, 0.3), fxRing(c, 38)] },
+  { id: "cave",     name: "Cave",     em: "🕳️", make: c => [fxReverb(c, 2.8, 2.2, 0.55)] },
+  { id: "echo",     name: "Echo",     em: "🔁", make: c => [fxEcho(c, 0.27, 0.42)] },
+  { id: "radio",    name: "Radio",    em: "📻", make: c => [fxFilter(c, "highpass", 320, 0.7), fxFilter(c, "lowpass", 3200, 0.7), fxDist(c, 9)] },
+];
+
+function buildChain(c, id) {
+  const input = G(c), output = G(c);
+  const stages = EFFECTS.find(e => e.id === id).make(c);
+  let prev = input;
+  for (const s of stages) { prev.connect(s.in); prev = s.out; }
+  prev.connect(output);
+  return { in: input, out: output };
+}
+
+// ---------- WAV encoding ----------
+function encodeWav(samples, rate) {
+  const buf = new ArrayBuffer(44 + samples.length * 2);
+  const v = new DataView(buf);
+  const wr = (off, s) => { for (let i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); };
+  wr(0, "RIFF"); v.setUint32(4, 36 + samples.length * 2, true); wr(8, "WAVE");
+  wr(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  wr(36, "data"); v.setUint32(40, samples.length * 2, true);
+  let off = 44;
+  for (let i = 0; i < samples.length; i++, off += 2) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    v.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return new Blob([buf], { type: "audio/wav" });
+}
+
+// ---------- app state ----------
+let actx = null, micStream = null, micSrc = null, chain = null;
+let masterOut = null, monitorGain = null, capture = null;
+let recording = false, recBufs = [], mode = "mic", currentFx = "normal";
+let fileBuffer = null, previewSrc = null;
+
+const $ = id => document.getElementById(id);
+const status = t => { $("status").textContent = t; };
+
+function ensureCtx() {
+  if (!actx) {
+    actx = new (window.AudioContext || window.webkitAudioContext)();
+    masterOut = G(actx, 1);
+    monitorGain = G(actx, 0);
+    masterOut.connect(monitorGain); monitorGain.connect(actx.destination);
+    // ScriptProcessor keeps the graph pulling samples so we can capture the
+    // processed signal for WAV export (muted path to destination keeps it alive).
+    capture = actx.createScriptProcessor(4096, 1, 1);
+    const mute = G(actx, 0);
+    masterOut.connect(capture); capture.connect(mute); mute.connect(actx.destination);
+    capture.onaudioprocess = e => {
+      if (recording) recBufs.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+    };
+  }
+  if (actx.state === "suspended") actx.resume();
+}
+
+function rebuildChain(sourceNode) {
+  if (chain) { try { chain.in.disconnect(); chain.out.disconnect(); } catch {} }
+  chain = buildChain(actx, currentFx);
+  if (sourceNode) { try { sourceNode.disconnect(); } catch {} sourceNode.connect(chain.in); }
+  chain.out.connect(masterOut);
+}
+
+// ---------- effect grid ----------
+const grid = $("fxGrid");
+for (const fx of EFFECTS) {
+  const b = document.createElement("button");
+  b.innerHTML = `<span class="em">${fx.em}</span>${fx.name}`;
+  b.dataset.id = fx.id;
+  if (fx.id === currentFx) b.classList.add("on");
+  b.onclick = () => {
+    currentFx = fx.id;
+    grid.querySelectorAll("button").forEach(x => x.classList.toggle("on", x.dataset.id === fx.id));
+    if (actx && mode === "mic" && micSrc) rebuildChain(micSrc);
+    if (mode === "file" && previewSrc) stopPreview();
+  };
+  grid.appendChild(b);
+}
+
+// ---------- mode switching ----------
+$("modeMic").onclick = () => setMode("mic");
+$("modeFile").onclick = () => { $("fileInput").click(); };
+$("fileInput").onchange = async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  ensureCtx();
+  status("Decoding " + f.name + "…");
+  try {
+    fileBuffer = await actx.decodeAudioData(await f.arrayBuffer());
+    setMode("file");
+    status(`Loaded "${f.name}" (${fileBuffer.duration.toFixed(1)}s). Pick an effect, then preview or download.`);
+  } catch { status("Couldn't read that file - try an MP3, WAV, OGG or M4A."); }
+};
+function setMode(m) {
+  mode = m;
+  $("modeMic").classList.toggle("on", m === "mic");
+  $("modeFile").classList.toggle("on", m === "file");
+  $("micControls").style.display = m === "mic" ? "flex" : "none";
+  $("fileControls").style.display = m === "file" ? "flex" : "none";
+  if (m === "mic" && previewSrc) stopPreview();
+}
+
+// ---------- mic recording ----------
+$("monitorChk").onchange = e => {
+  if (monitorGain) monitorGain.gain.value = e.target.checked ? 1 : 0;
+};
+$("recBtn").onclick = async () => {
+  ensureCtx();
+  if (!recording) {
+    if (!micStream) {
+      status("Asking for microphone access…");
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+        });
+      } catch { status("Microphone access was blocked - allow it in your browser and try again."); return; }
+      micSrc = actx.createMediaStreamSource(micStream);
+    }
+    rebuildChain(micSrc);
+    monitorGain.gain.value = $("monitorChk").checked ? 1 : 0;
+    recBufs = []; recording = true;
+    $("recBtn").textContent = "■ Stop";
+    $("recBtn").classList.add("rec");
+    $("result").innerHTML = "";
+    status("Recording… speak now!");
+  } else {
+    recording = false;
+    $("recBtn").textContent = "● Record";
+    $("recBtn").classList.remove("rec");
+    finishRecording();
+  }
+};
+function finishRecording() {
+  let len = 0; for (const b of recBufs) len += b.length;
+  if (!len) { status("Nothing recorded."); return; }
+  const all = new Float32Array(len);
+  let o = 0; for (const b of recBufs) { all.set(b, o); o += b.length; }
+  showResult(encodeWav(all, actx.sampleRate), "antigravity-" + currentFx + ".wav");
+  status("Done! Play it below or download it.");
+}
+
+// ---------- file preview + render ----------
+function stopPreview() {
+  if (previewSrc) { try { previewSrc.stop(); } catch {} previewSrc = null; }
+  $("previewBtn").textContent = "▶ Preview";
+  monitorGain.gain.value = $("monitorChk").checked && mode === "mic" ? 1 : 0;
+}
+$("previewBtn").onclick = () => {
+  if (!fileBuffer) { status("Upload an audio file first."); return; }
+  ensureCtx();
+  if (previewSrc) { stopPreview(); status(""); return; }
+  previewSrc = actx.createBufferSource();
+  previewSrc.buffer = fileBuffer;
+  rebuildChain(previewSrc);
+  monitorGain.gain.value = 1;
+  previewSrc.onended = () => stopPreview();
+  previewSrc.start();
+  $("previewBtn").textContent = "■ Stop";
+  status("Playing with the " + currentFx + " effect…");
+};
+$("downloadBtn").onclick = async () => {
+  if (!fileBuffer) { status("Upload an audio file first."); return; }
+  status("Converting…");
+  const rate = 44100;
+  const off = new OfflineAudioContext(1, Math.ceil((fileBuffer.duration + 1.5) * rate), rate);
+  const src = off.createBufferSource(); src.buffer = fileBuffer;
+  const ch = buildChain(off, currentFx);
+  src.connect(ch.in); ch.out.connect(off.destination);
+  src.start();
+  const rendered = await off.startRendering();
+  showResult(encodeWav(rendered.getChannelData(0), rate), "antigravity-" + currentFx + ".wav");
+  status("Converted! Play it below or download it.");
+};
+
+function showResult(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  $("result").innerHTML = "";
+  const audio = document.createElement("audio");
+  audio.controls = true; audio.src = url;
+  const a = document.createElement("a");
+  a.className = "btn"; a.style.marginTop = "10px"; a.style.display = "inline-block";
+  a.href = url; a.download = filename; a.textContent = "⬇ Download " + filename;
+  $("result").append(audio, a);
+}
+</script>
+</body></html>
