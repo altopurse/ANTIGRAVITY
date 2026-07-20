@@ -2,29 +2,30 @@
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Free Online Soundboard with Keybinds - No Download | Antigravity Web</title>
-<meta name="description" content="Free online soundboard: upload your sounds, assign a keyboard key to each one, and play them instantly. Works in your browser, no signup, sounds stay saved on your device.">
+<meta name="description" content="Free online soundboard: upload or record sounds, assign a keyboard key to each one, and play them instantly. Works in your browser, no signup, sounds stay saved on your device.">
 <link rel="canonical" href="__BASE_URL__/soundboard">
 <link rel="icon" href="/favicon.ico">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Antigravity Voice Engine">
 <meta property="og:title" content="Free Online Soundboard with Keybinds - Antigravity Web">
-<meta property="og:description" content="Upload sounds, bind them to keys, play them instantly - free, in your browser, no signup.">
+<meta property="og:description" content="Upload or record sounds, bind them to keys, play them instantly - free, in your browser, no signup.">
 <meta property="og:image" content="__BASE_URL__/og.png">
 <meta property="og:url" content="__BASE_URL__/soundboard">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Free Online Soundboard with Keybinds - Antigravity Web">
-<meta name="twitter:description" content="Upload sounds, bind them to keys, play them instantly - free, in your browser.">
+<meta name="twitter:description" content="Upload or record sounds, bind them to keys, play them instantly - free, in your browser.">
 <meta name="twitter:image" content="__BASE_URL__/og.png">
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"WebApplication","name":"Antigravity Web Soundboard",
 "url":"__BASE_URL__/soundboard","applicationCategory":"MultimediaApplication",
 "operatingSystem":"Any (runs in browser)","offers":{"@type":"Offer","price":"0","priceCurrency":"GBP"},
-"description":"Free online soundboard. Upload audio clips, assign a keyboard shortcut to each pad, and trigger them instantly. Sounds are stored locally in your browser and never uploaded."}
+"description":"Free online soundboard. Upload audio clips or record your own, assign a keyboard shortcut to each pad, and trigger them instantly. Sounds are stored locally in your browser and never uploaded."}
 </script>
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"FAQPage","mainEntity":[
 {"@type":"Question","name":"Is this online soundboard free?","acceptedAnswer":{"@type":"Answer","text":"Yes - free, no signup, no limits on how many sounds you add. It is the browser version of the Antigravity Voice Engine soundboard for Windows."}},
 {"@type":"Question","name":"Are my sounds uploaded to a server?","acceptedAnswer":{"@type":"Answer","text":"No. Sounds are stored in your browser's local storage (IndexedDB) on your own device, so they are still there when you come back - but they never leave your computer."}},
+{"@type":"Question","name":"Can I record my own sounds?","acceptedAnswer":{"@type":"Answer","text":"Yes - click Record, allow microphone access, and your clip becomes a pad with its own keybind. Recordings are saved locally like uploads."}},
 {"@type":"Question","name":"Do the keybinds work while I'm in a game or Discord?","acceptedAnswer":{"@type":"Answer","text":"Browser keybinds only work while this tab is focused - that is a browser security rule. For global hotkeys that fire sounds into Discord, games and calls while you play, download the free Antigravity Voice Engine app for Windows."}},
 {"@type":"Question","name":"What audio formats can I upload?","acceptedAnswer":{"@type":"Answer","text":"Any format your browser can play: MP3, WAV, OGG, M4A and more."}}]}
 </script>
@@ -38,21 +39,27 @@
   a{color:#a794ff}
   .tagline{text-align:center;color:#c7c7d1;max-width:520px;margin:8px auto 24px}
   .card{background:#161620;border:1px solid #2e2e3e;border-radius:12px;padding:22px}
+  .card.drop{border-color:#8a74ff;background:#191927}
   .btn{display:inline-block;background:#6d5ae0;color:#fff;border:none;border-radius:8px;padding:12px 24px;font-size:1rem;text-decoration:none;cursor:pointer;font-family:inherit}
   .btn:hover{background:#8a74ff}
   .btn.ghost{background:#1c1c26;border:1px solid #2e2e3e;color:#f2f2f7}
   .btn.ghost:hover{background:#26263a}
-  .topbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:center;margin-bottom:16px}
+  .btn.rec{background:#c0392b}.btn.rec:hover{background:#e74c3c}
+  .topbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:center;margin-bottom:6px}
+  .subbar{display:flex;gap:18px;flex-wrap:wrap;align-items:center;justify-content:center;margin-bottom:12px}
+  label.chk{color:#c7c7d1;font-size:0.9rem;display:inline-flex;gap:6px;align-items:center;cursor:pointer}
   .pads{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:16px}
   .pad{background:#1c1c26;border:1px solid #2e2e3e;border-radius:10px;padding:12px;cursor:pointer;position:relative;transition:border-color .1s}
   .pad:hover{border-color:#8a74ff}
   .pad.playing{border-color:#5fd18a;background:rgba(95,209,138,0.08)}
-  .pad .name{font-size:0.92rem;word-break:break-word;margin-bottom:8px;min-height:2.4em}
+  .pad.playing .keycap{color:#5fd18a;border-color:#5fd18a}
+  .pad .name{font-size:0.92rem;word-break:break-word;margin-bottom:6px;min-height:2.4em}
   .pad .keycap{display:inline-block;background:#0f0f14;border:1px solid #4a4a5e;border-bottom-width:3px;border-radius:6px;padding:2px 10px;font-family:ui-monospace,monospace;font-size:0.95rem;color:#a794ff;font-weight:700}
   .pad .keycap.unset{color:#5a5a68;font-weight:400}
   .pad .row{display:flex;justify-content:space-between;align-items:center}
   .pad .mini{background:none;border:none;color:#5a5a68;cursor:pointer;font-size:0.85rem;padding:4px;font-family:inherit}
   .pad .mini:hover{color:#f2f2f7}
+  .pad input[type=range]{width:100%;margin:2px 0 8px;accent-color:#6d5ae0;cursor:pointer}
   #empty{text-align:center;color:#9a9aa5;padding:28px 0}
   #status{color:#9a9aa5;font-size:0.9rem;margin-top:12px;min-height:1.2em;text-align:center}
   label.vol{display:inline-flex;align-items:center;gap:8px;color:#c7c7d1;font-size:0.9rem}
@@ -63,17 +70,23 @@
 </style></head><body><main>
 
 <h1>Free Online Soundboard with Keybinds</h1>
-<p class="tagline">Upload your sounds, give each one a key, and fire them instantly. Free, no
-signup - your sounds are saved <strong>on your device</strong> and never uploaded.</p>
+<p class="tagline">Upload or record your sounds, give each one a key, and fire them instantly.
+Free, no signup - your sounds are saved <strong>on your device</strong> and never uploaded.</p>
 
-<div class="card">
+<div class="card" id="boardCard">
   <div class="topbar">
     <button class="btn" id="addBtn">+ Add sounds</button>
     <input type="file" id="fileInput" accept="audio/*" multiple style="display:none">
+    <button class="btn ghost" id="recBtn">⏺ Record a sound</button>
+    <button class="btn ghost" id="sampleBtn">✨ Sample pack</button>
     <button class="btn ghost" id="stopBtn">■ Stop all (Esc)</button>
-    <label class="vol">🔊 <input type="range" id="volSlider" min="0" max="100" value="90"></label>
   </div>
-  <div id="empty">No sounds yet - click <strong>+ Add sounds</strong> and pick some audio files.<br>
+  <div class="subbar">
+    <label class="vol">🔊 <input type="range" id="volSlider" min="0" max="100" value="90"></label>
+    <label class="chk"><input type="checkbox" id="overlapChk"> Let sounds overlap</label>
+  </div>
+  <div id="empty">No sounds yet - <strong>drag &amp; drop audio files here</strong>, click
+  <strong>+ Add sounds</strong>, record one, or grab the ✨ sample pack.<br>
   Then press a pad's key (or click it) to play.</div>
   <div class="pads" id="pads"></div>
   <div id="status"></div>
@@ -98,10 +111,11 @@ signup - your sounds are saved <strong>on your device</strong> and never uploade
 
 <h2>How the soundboard works</h2>
 <ul class="plain">
-  <li><strong>1. Add sounds</strong> - upload MP3, WAV, OGG or M4A clips (memes, effects, music stings…).</li>
+  <li><strong>1. Add sounds</strong> - drag &amp; drop or upload MP3, WAV, OGG or M4A clips, record straight from your mic, or start with the built-in sample pack.</li>
   <li><strong>2. Keybinds are automatic</strong> - each pad gets a key (1-9, then letters). Click ⌨ on a pad to rebind it to any key you like.</li>
-  <li><strong>3. Play</strong> - press the key or click the pad. Press again to restart, <strong>Esc</strong> stops everything.</li>
-  <li><strong>4. Come back anytime</strong> - your board is saved in your browser, so your sounds and keybinds are still here tomorrow.</li>
+  <li><strong>3. Play</strong> - press the key or click the pad. Press again to restart (or tick "overlap" to layer sounds), <strong>Esc</strong> stops everything.</li>
+  <li><strong>4. Make it yours</strong> - rename pads (✎), set per-sound volume with the slider on each pad.</li>
+  <li><strong>5. Come back anytime</strong> - your board is saved in your browser, so your sounds and keybinds are still here tomorrow.</li>
 </ul>
 
 <h2>Frequently asked questions</h2>
@@ -109,6 +123,8 @@ signup - your sounds are saved <strong>on your device</strong> and never uploade
 <p class="muted" style="margin-bottom:0">Yes - free, no signup, unlimited sounds. It's the web version of our free Windows soundboard app.</p></div>
 <div class="card" style="margin-bottom:12px"><strong>Are my sounds uploaded anywhere?</strong>
 <p class="muted" style="margin-bottom:0">No. They're stored in your browser's local database on your own device.</p></div>
+<div class="card" style="margin-bottom:12px"><strong>Can I record my own sounds?</strong>
+<p class="muted" style="margin-bottom:0">Yes - click ⏺ Record, allow the microphone, and your clip becomes a pad with its own keybind.</p></div>
 <div class="card"><strong>Do keybinds work while I'm gaming?</strong>
 <p class="muted" style="margin-bottom:0">In the browser, only while this tab is focused. For global hotkeys that work in any game, grab the <a href="/download">free Windows app</a>.</p></div>
 
@@ -118,8 +134,8 @@ signup - your sounds are saved <strong>on your device</strong> and never uploade
 
 <script>
 "use strict";
-// Online soundboard: pads live in IndexedDB ({id, name, key, blob}) so the
-// board survives reloads without anything ever leaving the device.
+// Online soundboard: pads live in IndexedDB ({id, name, key, vol, order, blob})
+// so the board survives reloads without anything ever leaving the device.
 
 const DEFAULT_KEYS = "1234567890QWERTYUIOPASDFGHJKLZXCVBNM".split("");
 const $ = id => document.getElementById(id);
@@ -127,6 +143,7 @@ let db = null, pads = [], actx = null, masterGain = null;
 const decoded = new Map();   // pad id -> AudioBuffer
 const active = new Map();    // pad id -> [AudioBufferSourceNode]
 let awaitingKeyFor = null;
+let recState = null;         // {stream, src, proc, mute, bufs} while recording
 
 function status(t) { $("status").textContent = t; }
 
@@ -164,10 +181,12 @@ async function play(pad) {
     catch { status(`Couldn't play "${pad.name}" - unsupported format.`); return; }
     decoded.set(pad.id, buf);
   }
-  stopPad(pad.id); // retrigger restarts the sound
+  if (!$("overlapChk").checked) stopPad(pad.id); // default: retrigger restarts
   const src = actx.createBufferSource();
   src.buffer = buf;
-  src.connect(masterGain);
+  const padGain = actx.createGain();
+  padGain.gain.value = pad.vol;
+  src.connect(padGain); padGain.connect(masterGain);
   const el = document.querySelector(`[data-pad="${pad.id}"]`);
   if (el) el.classList.add("playing");
   src.onended = () => {
@@ -188,34 +207,89 @@ function stopAll() {
 }
 $("stopBtn").onclick = stopAll;
 
+// ---------- WAV encoding (for recordings + sample pack) ----------
+function encodeWav(samples, rate) {
+  const buf = new ArrayBuffer(44 + samples.length * 2);
+  const v = new DataView(buf);
+  const wr = (off, s) => { for (let i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); };
+  wr(0, "RIFF"); v.setUint32(4, 36 + samples.length * 2, true); wr(8, "WAVE");
+  wr(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  wr(36, "data"); v.setUint32(40, samples.length * 2, true);
+  let off = 44;
+  for (let i = 0; i < samples.length; i++, off += 2) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    v.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return new Blob([buf], { type: "audio/wav" });
+}
+
 // ---------- pads ----------
 function nextFreeKey() {
   const used = new Set(pads.map(p => p.key));
   return DEFAULT_KEYS.find(k => !used.has(k)) || "";
 }
+async function addPad(name, blob) {
+  const pad = {
+    id: crypto.randomUUID(),
+    name: name.slice(0, 40),
+    key: nextFreeKey(),
+    vol: 1,
+    order: pads.length ? Math.max(...pads.map(p => p.order)) + 1 : 0,
+    blob,
+  };
+  pads.push(pad);
+  await dbPut(pad);
+  return pad;
+}
+async function addFiles(files) {
+  ensureCtx();
+  let added = 0;
+  for (const f of files) {
+    if (!f.type.startsWith("audio") && !/\.(mp3|wav|ogg|m4a|aac|flac|webm)$/i.test(f.name)) continue;
+    await addPad(f.name.replace(/\.[^.]+$/, ""), f);
+    added++;
+  }
+  render();
+  status(added ? `Added ${added} sound${added > 1 ? "s" : ""} - press the key on a pad to play it.`
+               : "No audio files found - drop MP3, WAV, OGG or M4A files.");
+}
+
 function render() {
   const grid = $("pads");
   grid.innerHTML = "";
+  pads.sort((a, b) => a.order - b.order);
   $("empty").style.display = pads.length ? "none" : "block";
   for (const pad of pads) {
     const el = document.createElement("div");
     el.className = "pad";
     el.dataset.pad = pad.id;
     el.innerHTML = `
-      <div class="name"></div>
+      <div class="name" title="Sound name"></div>
+      <input type="range" min="0" max="100" title="Volume for this sound">
       <div class="row">
         <span class="keycap ${pad.key ? "" : "unset"}">${pad.key || "no key"}</span>
         <span>
           <button class="mini" title="Change keybind">⌨</button>
+          <button class="mini" title="Rename">✎</button>
           <button class="mini" title="Remove sound">✕</button>
         </span>
       </div>`;
     el.querySelector(".name").textContent = pad.name;
-    el.onclick = e => { if (e.target.tagName !== "BUTTON") play(pad); };
-    const [keyBtn, delBtn] = el.querySelectorAll(".mini");
+    const vol = el.querySelector("input[type=range]");
+    vol.value = Math.round(pad.vol * 100);
+    vol.onclick = e => e.stopPropagation();
+    vol.oninput = e => { pad.vol = Number(e.target.value) / 100; };
+    vol.onchange = () => dbPut(pad);
+    el.onclick = e => { if (e.target.tagName !== "BUTTON" && e.target.tagName !== "INPUT") play(pad); };
+    const [keyBtn, renameBtn, delBtn] = el.querySelectorAll(".mini");
     keyBtn.onclick = () => {
       awaitingKeyFor = pad;
       status(`Press the key you want for "${pad.name}" (Esc to cancel)…`);
+    };
+    renameBtn.onclick = async () => {
+      const name = prompt("Rename sound:", pad.name);
+      if (name && name.trim()) { pad.name = name.trim().slice(0, 40); await dbPut(pad); render(); }
     };
     delBtn.onclick = async () => {
       stopPad(pad.id);
@@ -230,33 +304,133 @@ function render() {
 }
 
 $("addBtn").onclick = () => $("fileInput").click();
-$("fileInput").onchange = async e => {
+$("fileInput").onchange = async e => { await addFiles([...e.target.files]); e.target.value = ""; };
+
+// Drag & drop anywhere on the board card
+const boardCard = $("boardCard");
+["dragenter", "dragover"].forEach(ev => boardCard.addEventListener(ev, e => {
+  e.preventDefault(); boardCard.classList.add("drop");
+}));
+["dragleave", "drop"].forEach(ev => boardCard.addEventListener(ev, e => {
+  e.preventDefault(); if (ev === "dragleave" && e.target !== boardCard) return;
+  boardCard.classList.remove("drop");
+}));
+boardCard.addEventListener("drop", e => { if (e.dataTransfer.files.length) addFiles([...e.dataTransfer.files]); });
+
+// ---------- record a sound ----------
+$("recBtn").onclick = async () => {
+  if (recState) { finishRecording(); return; }
   ensureCtx();
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+    });
+  } catch { status("Microphone access was blocked - allow it in your browser and try again."); return; }
+  const src = actx.createMediaStreamSource(stream);
+  const proc = actx.createScriptProcessor(4096, 1, 1);
+  const mute = actx.createGain(); mute.gain.value = 0;
+  const bufs = [];
+  proc.onaudioprocess = e => {
+    bufs.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+    if (bufs.length * 4096 > actx.sampleRate * 30) finishRecording(); // 30s cap
+  };
+  src.connect(proc); proc.connect(mute); mute.connect(actx.destination);
+  recState = { stream, src, proc, mute, bufs };
+  $("recBtn").textContent = "■ Stop recording";
+  $("recBtn").classList.add("rec");
+  status("Recording… click again to stop (30s max).");
+};
+async function finishRecording() {
+  if (!recState) return;
+  const { stream, src, proc, mute, bufs } = recState;
+  recState = null;
+  try { src.disconnect(); proc.disconnect(); mute.disconnect(); } catch {}
+  stream.getTracks().forEach(t => t.stop());
+  $("recBtn").textContent = "⏺ Record a sound";
+  $("recBtn").classList.remove("rec");
+  let len = 0; for (const b of bufs) len += b.length;
+  if (len < 2048) { status("Nothing recorded."); return; }
+  const all = new Float32Array(len);
+  let o = 0; for (const b of bufs) { all.set(b, o); o += b.length; }
+  const n = pads.filter(p => p.name.startsWith("Recording")).length + 1;
+  const pad = await addPad("Recording " + n, encodeWav(all, actx.sampleRate));
+  render();
+  status(`Saved "${pad.name}" - press ${pad.key || "its key"} to play it.`);
+}
+
+// ---------- sample pack (synthesized locally - no copyright, no download) ----------
+async function renderSample(dur, build) {
+  const rate = 44100;
+  const off = new OfflineAudioContext(1, Math.ceil(dur * rate), rate);
+  build(off);
+  const r = await off.startRendering();
+  return encodeWav(r.getChannelData(0), rate);
+}
+const SAMPLES = [
+  ["Airhorn", 1.1, c => {
+    const g = c.createGain(); g.gain.setValueAtTime(0.0001, 0);
+    g.gain.exponentialRampToValueAtTime(0.7, 0.03);
+    g.gain.setValueAtTime(0.7, 0.85); g.gain.exponentialRampToValueAtTime(0.001, 1.05);
+    const lp = c.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 2200;
+    const lfo = c.createOscillator(); lfo.frequency.value = 6.5;
+    const lfoG = c.createGain(); lfoG.gain.value = 14; lfo.connect(lfoG);
+    for (const f of [392, 395, 588]) {
+      const o = c.createOscillator(); o.type = "sawtooth"; o.frequency.value = f;
+      lfoG.connect(o.frequency); o.connect(lp); o.start();
+    }
+    lfo.start(); lp.connect(g); g.connect(c.destination);
+  }],
+  ["Laser", 0.45, c => {
+    const o = c.createOscillator(); o.type = "sine";
+    o.frequency.setValueAtTime(1900, 0); o.frequency.exponentialRampToValueAtTime(160, 0.32);
+    const g = c.createGain(); g.gain.setValueAtTime(0.8, 0); g.gain.exponentialRampToValueAtTime(0.001, 0.4);
+    o.connect(g); g.connect(c.destination); o.start();
+  }],
+  ["Boom", 1.0, c => {
+    const nb = c.createBuffer(1, c.sampleRate, c.sampleRate);
+    const d = nb.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    const n = c.createBufferSource(); n.buffer = nb;
+    const lp = c.createBiquadFilter(); lp.type = "lowpass";
+    lp.frequency.setValueAtTime(400, 0); lp.frequency.exponentialRampToValueAtTime(60, 0.8);
+    const g = c.createGain(); g.gain.setValueAtTime(1, 0); g.gain.exponentialRampToValueAtTime(0.001, 0.9);
+    const o = c.createOscillator(); o.frequency.setValueAtTime(70, 0);
+    o.frequency.exponentialRampToValueAtTime(35, 0.7);
+    const og = c.createGain(); og.gain.setValueAtTime(0.9, 0); og.gain.exponentialRampToValueAtTime(0.001, 0.8);
+    n.connect(lp); lp.connect(g); g.connect(c.destination);
+    o.connect(og); og.connect(c.destination);
+    n.start(); o.start();
+  }],
+  ["Bell", 1.6, c => {
+    for (const [f, a] of [[660, 0.5], [990, 0.3], [1320, 0.18]]) {
+      const o = c.createOscillator(); o.type = "sine"; o.frequency.value = f;
+      const g = c.createGain(); g.gain.setValueAtTime(a, 0); g.gain.exponentialRampToValueAtTime(0.001, 1.5);
+      o.connect(g); g.connect(c.destination); o.start();
+    }
+  }],
+];
+$("sampleBtn").onclick = async () => {
+  ensureCtx();
+  status("Generating sample pack…");
   let added = 0;
-  for (const f of e.target.files) {
-    const pad = {
-      id: crypto.randomUUID(),
-      name: f.name.replace(/\.[^.]+$/, "").slice(0, 40),
-      key: nextFreeKey(),
-      blob: f,
-    };
-    pads.push(pad);
-    await dbPut(pad);
+  for (const [name, dur, build] of SAMPLES) {
+    if (pads.some(p => p.name === name)) continue; // don't duplicate on repeat clicks
+    await addPad(name, await renderSample(dur, build));
     added++;
   }
-  e.target.value = "";
   render();
-  status(added ? `Added ${added} sound${added > 1 ? "s" : ""} - press the key on a pad to play it.` : "");
+  status(added ? "Sample pack added - press the keys on the pads!" : "Sample pack is already on your board.");
 };
 
 // ---------- keybinds ----------
 function normKey(e) {
-  if (e.key === " ") return "SPACE";
-  return e.key.length === 1 ? e.key.toUpperCase() : e.key.toUpperCase();
+  return e.key === " " ? "SPACE" : e.key.toUpperCase();
 }
 window.addEventListener("keydown", async e => {
-  if (e.ctrlKey || e.metaKey || e.altKey) return;
-  if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) && document.activeElement.type !== "range") return;
+  if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
+  const a = document.activeElement;
+  if (a && /INPUT|TEXTAREA|SELECT/.test(a.tagName) && a.type !== "range") return;
 
   if (awaitingKeyFor) {
     e.preventDefault();
@@ -282,6 +456,14 @@ window.addEventListener("keydown", async e => {
   try {
     db = await openDb();
     pads = await dbAll();
+    // migrate pads saved by the first version (no vol/order fields)
+    pads.forEach((p, i) => {
+      if (p.vol == null || p.order == null) {
+        if (p.vol == null) p.vol = 1;
+        if (p.order == null) p.order = i;
+        dbPut(p);
+      }
+    });
     render();
     if (pads.length) status(`Loaded ${pads.length} saved sound${pads.length > 1 ? "s" : ""} - press a key to play.`);
   } catch {
