@@ -566,6 +566,7 @@ app.get("/", async (req, res) => {
 
        <footer>Antigravity Voice Engine · <a href="/download" style="color:#5a5a68">Download</a>
          · <a href="/voice-changer" style="color:#5a5a68">Web voice changer</a>
+         · <a href="/soundboard" style="color:#5a5a68">Online soundboard</a>
          · <a href="/partners" style="color:#5a5a68">Streamers</a>
          · <a href="/recover" style="color:#5a5a68">Lost key?</a>
          · <a href="/legal" style="color:#5a5a68">Terms &amp; Privacy</a></footer>`,
@@ -585,6 +586,15 @@ app.get("/voice-changer", (req, res) => {
   res.type("html").send(vcHtmlRaw.replaceAll("__BASE_URL__", site));
 });
 
+// Online soundboard with keybinds - same deal: static page, client-side audio,
+// sounds persist in the visitor's own IndexedDB.
+const sbHtmlRaw = fs.readFileSync(path.join(__dirname, "public", "soundboard.html"), "utf8");
+app.get("/soundboard", (req, res) => {
+  trackView(req, res, "soundboard");
+  const site = BASE_URL || `http://localhost:${PORT}`;
+  res.type("html").send(sbHtmlRaw.replaceAll("__BASE_URL__", site));
+});
+
 // SEO plumbing: robots.txt + sitemap.xml (submit the sitemap in Google Search
 // Console once, then every new public page gets discovered automatically).
 app.get("/robots.txt", (req, res) => {
@@ -595,7 +605,7 @@ app.get("/robots.txt", (req, res) => {
 });
 app.get("/sitemap.xml", (req, res) => {
   const site = BASE_URL || `http://localhost:${PORT}`;
-  const urls = ["/", "/voice-changer", "/partners", "/legal"];
+  const urls = ["/", "/voice-changer", "/soundboard", "/partners", "/legal"];
   res.type("application/xml").send(
     `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
     urls.map((u) => `  <url><loc>${site}${u}</loc></url>`).join("\n") +

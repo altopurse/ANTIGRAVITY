@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Free Online Soundboard with Keybinds - No Download | Antigravity Web</title>
+<meta name="description" content="Free online soundboard: upload your sounds, assign a keyboard key to each one, and play them instantly. Works in your browser, no signup, sounds stay saved on your device.">
+<link rel="canonical" href="__BASE_URL__/soundboard">
+<link rel="icon" href="/favicon.ico">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Antigravity Voice Engine">
+<meta property="og:title" content="Free Online Soundboard with Keybinds - Antigravity Web">
+<meta property="og:description" content="Upload sounds, bind them to keys, play them instantly - free, in your browser, no signup.">
+<meta property="og:image" content="__BASE_URL__/og.png">
+<meta property="og:url" content="__BASE_URL__/soundboard">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Free Online Soundboard with Keybinds - Antigravity Web">
+<meta name="twitter:description" content="Upload sounds, bind them to keys, play them instantly - free, in your browser.">
+<meta name="twitter:image" content="__BASE_URL__/og.png">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"WebApplication","name":"Antigravity Web Soundboard",
+"url":"__BASE_URL__/soundboard","applicationCategory":"MultimediaApplication",
+"operatingSystem":"Any (runs in browser)","offers":{"@type":"Offer","price":"0","priceCurrency":"GBP"},
+"description":"Free online soundboard. Upload audio clips, assign a keyboard shortcut to each pad, and trigger them instantly. Sounds are stored locally in your browser and never uploaded."}
+</script>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[
+{"@type":"Question","name":"Is this online soundboard free?","acceptedAnswer":{"@type":"Answer","text":"Yes - free, no signup, no limits on how many sounds you add. It is the browser version of the Antigravity Voice Engine soundboard for Windows."}},
+{"@type":"Question","name":"Are my sounds uploaded to a server?","acceptedAnswer":{"@type":"Answer","text":"No. Sounds are stored in your browser's local storage (IndexedDB) on your own device, so they are still there when you come back - but they never leave your computer."}},
+{"@type":"Question","name":"Do the keybinds work while I'm in a game or Discord?","acceptedAnswer":{"@type":"Answer","text":"Browser keybinds only work while this tab is focused - that is a browser security rule. For global hotkeys that fire sounds into Discord, games and calls while you play, download the free Antigravity Voice Engine app for Windows."}},
+{"@type":"Question","name":"What audio formats can I upload?","acceptedAnswer":{"@type":"Answer","text":"Any format your browser can play: MP3, WAV, OGG, M4A and more."}}]}
+</script>
+<style>
+  *{box-sizing:border-box}
+  body{font-family:system-ui,sans-serif;background:#0f0f14;color:#f2f2f7;display:flex;justify-content:center;padding:48px 16px;margin:0}
+  main{max-width:760px;width:100%}
+  h1{color:#8a74ff;font-size:1.7rem;margin:0 0 4px;text-align:center}
+  h2{font-size:1.15rem;margin:36px 0 12px}
+  p.muted{color:#9a9aa5}
+  a{color:#a794ff}
+  .tagline{text-align:center;color:#c7c7d1;max-width:520px;margin:8px auto 24px}
+  .card{background:#161620;border:1px solid #2e2e3e;border-radius:12px;padding:22px}
+  .btn{display:inline-block;background:#6d5ae0;color:#fff;border:none;border-radius:8px;padding:12px 24px;font-size:1rem;text-decoration:none;cursor:pointer;font-family:inherit}
+  .btn:hover{background:#8a74ff}
+  .btn.ghost{background:#1c1c26;border:1px solid #2e2e3e;color:#f2f2f7}
+  .btn.ghost:hover{background:#26263a}
+  .topbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:center;margin-bottom:16px}
+  .pads{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:16px}
+  .pad{background:#1c1c26;border:1px solid #2e2e3e;border-radius:10px;padding:12px;cursor:pointer;position:relative;transition:border-color .1s}
+  .pad:hover{border-color:#8a74ff}
+  .pad.playing{border-color:#5fd18a;background:rgba(95,209,138,0.08)}
+  .pad .name{font-size:0.92rem;word-break:break-word;margin-bottom:8px;min-height:2.4em}
+  .pad .keycap{display:inline-block;background:#0f0f14;border:1px solid #4a4a5e;border-bottom-width:3px;border-radius:6px;padding:2px 10px;font-family:ui-monospace,monospace;font-size:0.95rem;color:#a794ff;font-weight:700}
+  .pad .keycap.unset{color:#5a5a68;font-weight:400}
+  .pad .row{display:flex;justify-content:space-between;align-items:center}
+  .pad .mini{background:none;border:none;color:#5a5a68;cursor:pointer;font-size:0.85rem;padding:4px;font-family:inherit}
+  .pad .mini:hover{color:#f2f2f7}
+  #empty{text-align:center;color:#9a9aa5;padding:28px 0}
+  #status{color:#9a9aa5;font-size:0.9rem;margin-top:12px;min-height:1.2em;text-align:center}
+  label.vol{display:inline-flex;align-items:center;gap:8px;color:#c7c7d1;font-size:0.9rem}
+  .cta{background:rgba(138,116,255,0.10);border:1px solid rgba(138,116,255,0.4);border-radius:12px;padding:20px;text-align:center;margin-top:36px}
+  footer{margin-top:40px;color:#5a5a68;font-size:0.85rem;text-align:center}
+  footer a{color:#5a5a68}
+  ul.plain{color:#c7c7d1;line-height:1.7}
+</style></head><body><main>
+
+<h1>Free Online Soundboard with Keybinds</h1>
+<p class="tagline">Upload your sounds, give each one a key, and fire them instantly. Free, no
+signup - your sounds are saved <strong>on your device</strong> and never uploaded.</p>
+
+<div class="card">
+  <div class="topbar">
+    <button class="btn" id="addBtn">+ Add sounds</button>
+    <input type="file" id="fileInput" accept="audio/*" multiple style="display:none">
+    <button class="btn ghost" id="stopBtn">■ Stop all (Esc)</button>
+    <label class="vol">🔊 <input type="range" id="volSlider" min="0" max="100" value="90"></label>
+  </div>
+  <div id="empty">No sounds yet - click <strong>+ Add sounds</strong> and pick some audio files.<br>
+  Then press a pad's key (or click it) to play.</div>
+  <div class="pads" id="pads"></div>
+  <div id="status"></div>
+</div>
+
+<div class="cta">
+  <div style="font-weight:600;font-size:1.05rem;margin-bottom:6px">Want these keybinds to work in-game?</div>
+  <p class="muted" style="margin:0 0 14px">Browser keybinds only work while this tab is focused - that's
+  a browser rule, not ours. The free <strong style="color:#f2f2f7">Antigravity Voice Engine</strong> app
+  for Windows gives your soundboard <strong style="color:#f2f2f7">global hotkeys</strong> that fire
+  sounds straight into Discord, games and calls while you play - plus a real-time voice changer.</p>
+  <a class="btn" href="/download">Download free for Windows</a>
+  <a class="btn ghost" href="/voice-changer" style="margin-left:8px">Try the web voice changer</a>
+</div>
+
+<div style="margin:36px 0 8px">
+<div id="frame" style="width:100%;margin:auto;position:relative;z-index:99998">
+  <iframe data-aa='2447478' src='//acceptable.a-ads.com/2447478/?size=Adaptive'
+    style='border:0;padding:0;width:70%;height:auto;overflow:hidden;display:block;margin:auto'></iframe>
+</div>
+</div>
+
+<h2>How the soundboard works</h2>
+<ul class="plain">
+  <li><strong>1. Add sounds</strong> - upload MP3, WAV, OGG or M4A clips (memes, effects, music stings…).</li>
+  <li><strong>2. Keybinds are automatic</strong> - each pad gets a key (1-9, then letters). Click ⌨ on a pad to rebind it to any key you like.</li>
+  <li><strong>3. Play</strong> - press the key or click the pad. Press again to restart, <strong>Esc</strong> stops everything.</li>
+  <li><strong>4. Come back anytime</strong> - your board is saved in your browser, so your sounds and keybinds are still here tomorrow.</li>
+</ul>
+
+<h2>Frequently asked questions</h2>
+<div class="card" style="margin-bottom:12px"><strong>Is it really free?</strong>
+<p class="muted" style="margin-bottom:0">Yes - free, no signup, unlimited sounds. It's the web version of our free Windows soundboard app.</p></div>
+<div class="card" style="margin-bottom:12px"><strong>Are my sounds uploaded anywhere?</strong>
+<p class="muted" style="margin-bottom:0">No. They're stored in your browser's local database on your own device.</p></div>
+<div class="card"><strong>Do keybinds work while I'm gaming?</strong>
+<p class="muted" style="margin-bottom:0">In the browser, only while this tab is focused. For global hotkeys that work in any game, grab the <a href="/download">free Windows app</a>.</p></div>
+
+<footer>Antigravity Voice Engine · <a href="/">Home</a> · <a href="/voice-changer">Web voice changer</a>
+· <a href="/download">Download app</a> · <a href="/partners">Streamers</a> · <a href="/legal">Terms &amp; Privacy</a></footer>
+</main>
+
+<script>
+"use strict";
+// Online soundboard: pads live in IndexedDB ({id, name, key, blob}) so the
+// board survives reloads without anything ever leaving the device.
+
+const DEFAULT_KEYS = "1234567890QWERTYUIOPASDFGHJKLZXCVBNM".split("");
+const $ = id => document.getElementById(id);
+let db = null, pads = [], actx = null, masterGain = null;
+const decoded = new Map();   // pad id -> AudioBuffer
+const active = new Map();    // pad id -> [AudioBufferSourceNode]
+let awaitingKeyFor = null;
+
+function status(t) { $("status").textContent = t; }
+
+// ---------- IndexedDB ----------
+function openDb() {
+  return new Promise((ok, bad) => {
+    const r = indexedDB.open("antigravity-soundboard", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("sounds", { keyPath: "id" });
+    r.onsuccess = () => ok(r.result);
+    r.onerror = () => bad(r.error);
+  });
+}
+const tx = mode => db.transaction("sounds", mode).objectStore("sounds");
+const dbPut = pad => new Promise((ok, bad) => { const q = tx("readwrite").put(pad); q.onsuccess = ok; q.onerror = () => bad(q.error); });
+const dbDelete = id => new Promise((ok, bad) => { const q = tx("readwrite").delete(id); q.onsuccess = ok; q.onerror = () => bad(q.error); });
+const dbAll = () => new Promise((ok, bad) => { const q = tx("readonly").getAll(); q.onsuccess = () => ok(q.result); q.onerror = () => bad(q.error); });
+
+// ---------- audio ----------
+function ensureCtx() {
+  if (!actx) {
+    actx = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = actx.createGain();
+    masterGain.gain.value = Number($("volSlider").value) / 100;
+    masterGain.connect(actx.destination);
+  }
+  if (actx.state === "suspended") actx.resume();
+}
+$("volSlider").oninput = e => { if (masterGain) masterGain.gain.value = Number(e.target.value) / 100; };
+
+async function play(pad) {
+  ensureCtx();
+  let buf = decoded.get(pad.id);
+  if (!buf) {
+    try { buf = await actx.decodeAudioData(await pad.blob.arrayBuffer()); }
+    catch { status(`Couldn't play "${pad.name}" - unsupported format.`); return; }
+    decoded.set(pad.id, buf);
+  }
+  stopPad(pad.id); // retrigger restarts the sound
+  const src = actx.createBufferSource();
+  src.buffer = buf;
+  src.connect(masterGain);
+  const el = document.querySelector(`[data-pad="${pad.id}"]`);
+  if (el) el.classList.add("playing");
+  src.onended = () => {
+    const list = active.get(pad.id) || [];
+    active.set(pad.id, list.filter(s => s !== src));
+    if (el && !(active.get(pad.id) || []).length) el.classList.remove("playing");
+  };
+  active.set(pad.id, [...(active.get(pad.id) || []), src]);
+  src.start();
+}
+function stopPad(id) {
+  for (const s of active.get(id) || []) { try { s.stop(); } catch {} }
+  active.set(id, []);
+}
+function stopAll() {
+  for (const id of active.keys()) stopPad(id);
+  document.querySelectorAll(".pad.playing").forEach(el => el.classList.remove("playing"));
+}
+$("stopBtn").onclick = stopAll;
+
+// ---------- pads ----------
+function nextFreeKey() {
+  const used = new Set(pads.map(p => p.key));
+  return DEFAULT_KEYS.find(k => !used.has(k)) || "";
+}
+function render() {
+  const grid = $("pads");
+  grid.innerHTML = "";
+  $("empty").style.display = pads.length ? "none" : "block";
+  for (const pad of pads) {
+    const el = document.createElement("div");
+    el.className = "pad";
+    el.dataset.pad = pad.id;
+    el.innerHTML = `
+      <div class="name"></div>
+      <div class="row">
+        <span class="keycap ${pad.key ? "" : "unset"}">${pad.key || "no key"}</span>
+        <span>
+          <button class="mini" title="Change keybind">⌨</button>
+          <button class="mini" title="Remove sound">✕</button>
+        </span>
+      </div>`;
+    el.querySelector(".name").textContent = pad.name;
+    el.onclick = e => { if (e.target.tagName !== "BUTTON") play(pad); };
+    const [keyBtn, delBtn] = el.querySelectorAll(".mini");
+    keyBtn.onclick = () => {
+      awaitingKeyFor = pad;
+      status(`Press the key you want for "${pad.name}" (Esc to cancel)…`);
+    };
+    delBtn.onclick = async () => {
+      stopPad(pad.id);
+      decoded.delete(pad.id);
+      pads = pads.filter(p => p.id !== pad.id);
+      await dbDelete(pad.id);
+      render();
+      status(`Removed "${pad.name}".`);
+    };
+    grid.appendChild(el);
+  }
+}
+
+$("addBtn").onclick = () => $("fileInput").click();
+$("fileInput").onchange = async e => {
+  ensureCtx();
+  let added = 0;
+  for (const f of e.target.files) {
+    const pad = {
+      id: crypto.randomUUID(),
+      name: f.name.replace(/\.[^.]+$/, "").slice(0, 40),
+      key: nextFreeKey(),
+      blob: f,
+    };
+    pads.push(pad);
+    await dbPut(pad);
+    added++;
+  }
+  e.target.value = "";
+  render();
+  status(added ? `Added ${added} sound${added > 1 ? "s" : ""} - press the key on a pad to play it.` : "");
+};
+
+// ---------- keybinds ----------
+function normKey(e) {
+  if (e.key === " ") return "SPACE";
+  return e.key.length === 1 ? e.key.toUpperCase() : e.key.toUpperCase();
+}
+window.addEventListener("keydown", async e => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) && document.activeElement.type !== "range") return;
+
+  if (awaitingKeyFor) {
+    e.preventDefault();
+    if (e.key === "Escape") { awaitingKeyFor = null; status("Keybind change cancelled."); return; }
+    const k = normKey(e);
+    const clash = pads.find(p => p.key === k && p.id !== awaitingKeyFor.id);
+    if (clash) { clash.key = ""; await dbPut(clash); }
+    awaitingKeyFor.key = k;
+    await dbPut(awaitingKeyFor);
+    status(`"${awaitingKeyFor.name}" is now bound to ${k}${clash ? ` (took it from "${clash.name}")` : ""}.`);
+    awaitingKeyFor = null;
+    render();
+    return;
+  }
+
+  if (e.key === "Escape") { stopAll(); return; }
+  const pad = pads.find(p => p.key === normKey(e));
+  if (pad) { e.preventDefault(); play(pad); }
+});
+
+// ---------- boot ----------
+(async () => {
+  try {
+    db = await openDb();
+    pads = await dbAll();
+    render();
+    if (pads.length) status(`Loaded ${pads.length} saved sound${pads.length > 1 ? "s" : ""} - press a key to play.`);
+  } catch {
+    $("empty").textContent = "Your browser blocked local storage - sounds will work but won't be saved between visits.";
+    db = { transaction: () => ({ objectStore: () => ({ put: () => ({}), delete: () => ({}), getAll: () => ({}) }) }) };
+    pads = [];
+    render();
+  }
+})();
+</script>
+</body></html>
